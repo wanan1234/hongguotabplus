@@ -10,36 +10,38 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git curl unzip dpkg-dev perl
+          sudo apt-get install -y build-essential git curl unzip dpkg-dev perl python3
 
-      - name: Install Theos (with submodules)
+      - name: Install Theos
         run: |
-          git clone --recursive --depth 1 https://github.com/theos/theos.git $HOME/theos
+          git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
-          # 确保 dm.pl 符号链接有效
-          if [ -L "$HOME/theos/bin/dm.pl" ]; then
-            realpath "$HOME/theos/bin/dm.pl" || {
-              echo "dm.pl link broken, installing manually"
-              curl -L -o "$HOME/theos/bin/dm.pl" https://raw.githubusercontent.com/theos/dm.pl/master/dm.pl
-            }
-          fi
-          chmod +x $HOME/theos/bin/dm.pl
 
-      - name: Install iOS SDK
+      - name: Install iOS toolchain (clang)
+        run: |
+          # 下载预编译的 iOS toolchain (从 Theos 官方)
+          curl -L https://github.com/theos/toolchain/releases/download/v1.0.0/linux-ios-clang.tar.xz -o toolchain.tar.xz
+          tar -xf toolchain.tar.xz -C $HOME/theos
+          # 设置符号链接
+          ln -sf $HOME/theos/toolchain/linux/ios/iphone $HOME/theos/toolchain/linux/iphone
+          # 确保 clang 可执行
+          chmod +x $HOME/theos/toolchain/linux/iphone/bin/clang
+
+      - name: Install iOS SDK (iPhoneOS.sdk)
         run: |
           curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
           unzip sdks.zip -d $HOME/theos/sdks
           mv $HOME/theos/sdks/sdks-master/* $HOME/theos/sdks/
           rm -rf $HOME/theos/sdks/sdks-master
 
-      - name: Build package
+      - name: Build
         run: |
           make package
 
