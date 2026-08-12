@@ -1,38 +1,51 @@
-# .github/workflows/build.yml
 name: Build HongGuo Tweak
 
 on:
   push:
     branches: [ main ]
-  # 可选：当你创建 Release 时也会触发构建
-  # release:
-  #   types: [ published ]
+  release:
+    types: [ published ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 使用 theos-action 一键设置 Theos 环境
-      - name: Install Theos
-        uses: Randomblock1/theos-action@v1
-        with:
-          # 指定 Theos 的安装路径，默认是 'theos'
-          theos-dir: 'theos'
-          # 指定 SDK 仓库，默认是 'https://github.com/theos/sdks'
-          theos-sdks: 'https://github.com/theos/sdks'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git curl unzip dpkg-dev perl xz-utils
 
-      # 构建插件
+      - name: Clone Theos
+        run: |
+          git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "$HOME/theos/bin" >> $GITHUB_PATH
+
+      - name: Download iOS toolchain (clang)
+        run: |
+          # 使用正确的 Linux 工具链包 (zip)
+          curl -L https://developer.angelxwind.net/Linux/ios-toolchain_clang+llvm+ld64_latest_linux_x86_64.zip -o toolchain.zip
+          mkdir -p $HOME/theos/toolchain/linux/iphone
+          unzip -q toolchain.zip -d $HOME/theos/toolchain/linux/iphone
+          rm toolchain.zip
+
+      - name: Download iOS SDKs
+        run: |
+          curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
+          unzip -q sdks.zip
+          mkdir -p $HOME/theos/sdks
+          mv sdks-master/* $HOME/theos/sdks/
+          rm -rf sdks-master sdks.zip
+
       - name: Build package
         run: |
-          # 让 make 命令能找到我们刚安装的 Theos
-          export THEOS=$(pwd)/theos
           make package
 
-      # 上传生成的 .deb 包
-      - name: Upload deb
+      - name: Upload deb artifact
         uses: actions/upload-artifact@v4
         with:
           name: HongGuoFullScreen.deb
