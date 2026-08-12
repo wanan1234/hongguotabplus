@@ -1,0 +1,48 @@
+name: Build HongGuo Tweak
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git curl unzip dpkg-dev perl
+
+      - name: Install Theos (with submodules)
+        run: |
+          git clone --recursive --depth 1 https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "$HOME/theos/bin" >> $GITHUB_PATH
+
+      - name: Install iOS toolchain (clang)
+        run: |
+          curl -L https://github.com/theos/toolchain/releases/download/v3.0.0/ios-arm64e-clang.tar.xz -o toolchain.tar.xz
+          mkdir -p $HOME/theos/toolchain/linux/iphone
+          tar -xJf toolchain.tar.xz -C $HOME/theos/toolchain/linux/iphone --strip-components=1
+
+      - name: Install iOS SDK 14.0
+        run: |
+          curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
+          unzip sdks.zip -d $HOME/theos/sdks
+          mv $HOME/theos/sdks/sdks-master/* $HOME/theos/sdks/
+          rm -rf $HOME/theos/sdks/sdks-master
+
+      - name: Build package
+        run: |
+          make package
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: HongGuoFullScreen.deb
+          path: packages/*.deb
