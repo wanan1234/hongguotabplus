@@ -1,135 +1,35 @@
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <objc/runtime.h>
-#import <sys/stat.h>
-#import <unistd.h>
 
 // =============================================
-// 诊断日志（写入 /var/mobile/Documents/HongGuoDiagnostic.log）
+// 日志工具（写入 /tmp，确保可写）
 // =============================================
-static void HongGuoWriteLog(NSString *format, ...) {
+static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    
-    NSString *logPath = @"/var/mobile/Documents/HongGuoDiagnostic.log";
+
+    NSString *logPath = @"/tmp/HongGuo.log";
     NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:@"/var/mobile/Documents"]) {
-        [fm createDirectoryAtPath:@"/var/mobile/Documents" withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     NSString *timestamp = [df stringFromDate:[NSDate date]];
-    NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
-    
-    // 追加到文件
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) {
-        [logLine writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
+
+    if (![fm fileExistsAtPath:logPath]) {
+        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     } else {
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
         [fh seekToEndOfFile];
-        [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
 }
 
-static void HongGuoDumpViewHierarchy(UIView *view, NSMutableString *output, NSInteger depth) {
-    if (!view) return;
-    NSMutableString *indent = [NSMutableString string];
-    for (NSInteger i = 0; i < depth; i++) [indent appendString:@"  "];
-    NSString *className = NSStringFromClass([view class]);
-    [output appendFormat:@"%@%@ frame:%@ alpha:%.2f hidden:%d userInteraction:%d\n", indent, className, NSStringFromCGRect(view.frame), view.alpha, view.hidden, view.userInteractionEnabled];
-    for (UIView *sub in view.subviews) {
-        HongGuoDumpViewHierarchy(sub, output, depth+1);
-    }
-}
-
-static void HongGuoDiagnose() {
-    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) {
-        HongGuoWriteLog(@"No key window found");
-        return;
-    }
-    NSMutableString *dump = [NSMutableString string];
-    [dump appendString:@"=== Windows ===\n"];
-    NSArray *windows = [UIApplication sharedApplication].windows;
-    for (UIWindow *w in windows) {
-        [dump appendFormat:@"Window: %@ frame:%@ hidden:%d\n", NSStringFromClass([w class]), NSStringFromCGRect(w.frame), w.hidden];
-    }
-    [dump appendFormat:@"\n=== Key Window Hierarchy ===\n"];
-    HongGuoDumpViewHierarchy(keyWindow, dump, 0);
-    
-    [dump appendFormat:@"\n=== Root ViewController ===\n"];
-    UIViewController *root = keyWindow.rootViewController;
-    [dump appendFormat:@"RootVC: %@\n", root ? NSStringFromClass([root class]) : @"nil"];
-    if (root) {
-        [dump appendFormat:@"Child VCs: %lu\n", (unsigned long)root.childViewControllers.count];
-        for (UIViewController *vc in root.childViewControllers) {
-            [dump appendFormat:@"  %@\n", NSStringFromClass([vc class])];
-        }
-        if (root.presentedViewController) {
-            [dump appendFormat:@"Presented: %@\n", NSStringFromClass([root.presentedViewController class])];
-        }
-    }
-    
-    // 查找 SSTabBarController
-    Class tabClass = NSClassFromString(@"SSTabBarController");
-    if (tabClass) {
-        [dump appendFormat:@"\nSSTabBarController class exists: %@\n", tabClass];
-        id tab = nil;
-        UIViewController *current = root;
-        while (current) {
-            if ([current isKindOfClass:tabClass]) {
-                tab = current;
-                break;
-            }
-            if (current.childViewControllers.count > 0) {
-                current = current.childViewControllers.firstObject;
-            } else {
-                break;
-            }
-        }
-        if (tab) {
-            [dump appendFormat:@"Found SSTabBarController: %@\n", tab];
-            id tabBar = [tab valueForKey:@"tabBar"];
-            if (tabBar) {
-                [dump appendFormat:@"tabBar: %@ frame:%@ hidden:%d\n", NSStringFromClass([tabBar class]), NSStringFromCGRect([tabBar frame]), [tabBar isHidden]];
-                // 列出所有子视图
-                for (UIView *sub in [tabBar subviews]) {
-                    [dump appendFormat:@"  tabBar subview: %@ frame:%@\n", NSStringFromClass([sub class]), NSStringFromCGRect(sub.frame)];
-                }
-            } else {
-                [dump appendString:@"tabBar is nil\n"];
-            }
-            NSArray *vcs = [tab valueForKey:@"viewControllers"];
-            if (vcs) {
-                [dump appendFormat:@"viewControllers count: %lu\n", (unsigned long)vcs.count];
-                for (id vc in vcs) {
-                    [dump appendFormat:@"  %@\n", NSStringFromClass([vc class])];
-                }
-            }
-        } else {
-            [dump appendString:@"SSTabBarController not found in hierarchy\n"];
-        }
-    } else {
-        [dump appendString:@"SSTabBarController class NOT found\n"];
-    }
-    
-    // 查找首页控制器
-    Class feedClass = NSClassFromString(@"SSVideoSeriesFeedViewController");
-    if (feedClass) {
-        [dump appendFormat:@"\nSSVideoSeriesFeedViewController class exists: %@\n", feedClass];
-    } else {
-        [dump appendString:@"SSVideoSeriesFeedViewController class NOT found\n"];
-    }
-    
-    HongGuoWriteLog(@"Diagnostic dump:\n%@", dump);
-}
-
 // =============================================
-// 辅助类
+// 辅助类：封装功能
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
@@ -141,17 +41,15 @@ static void HongGuoDiagnose() {
 @implementation HongGuoHelper
 
 + (void)showSettingsMenuFromWindow:(UIWindow *)window {
-    HongGuoWriteLog(@"showSettingsMenuFromWindow called");
+    WriteLog(@"showSettingsMenuFromWindow");
     UIViewController *topVC = window.rootViewController;
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
 
     BOOL fullscreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
     BOOL hideTab = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果设置"
-                                                                   message:[NSString stringWithFormat:@"全屏：%@\n隐藏底栏：%@", fullscreen ? @"开" : @"关", hideTab ? @"开" : @"关"]
+                                                                   message:[NSString stringWithFormat:@"全屏：%@\n底栏：%@", fullscreen ? @"开" : @"关", hideTab ? @"隐藏" : @"显示"]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 全屏", fullscreen ? @"关闭" : @"开启"]
@@ -183,86 +81,76 @@ static void HongGuoDiagnose() {
 }
 
 + (void)applyTabBarVisibility {
-    HongGuoWriteLog(@"applyTabBarVisibility");
+    WriteLog(@"applyTabBarVisibility");
     UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) {
-        HongGuoWriteLog(@"No window");
-        return;
-    }
+    if (!keyWindow) return;
+
     UIViewController *root = keyWindow.rootViewController;
     Class tabClass = NSClassFromString(@"SSTabBarController");
-    id tab = nil;
-    UIViewController *current = root;
-    while (current) {
-        if ([current isKindOfClass:tabClass]) {
-            tab = current;
-            break;
-        }
-        if (current.childViewControllers.count > 0) {
-            current = current.childViewControllers.firstObject;
-        } else {
-            break;
-        }
+    if (!tabClass || ![root isKindOfClass:tabClass]) {
+        WriteLog(@"Root is not SSTabBarController");
+        return;
     }
-    if (tab) {
-        id tabBar = [tab valueForKey:@"tabBar"];
-        if (tabBar) {
-            BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-            // 直接隐藏整个 tabBar
-            [tabBar setValue:@(hide) forKey:@"hidden"];
-            if (hide) {
-                // 将 tabBar 移出屏幕
-                CGRect frame = [tabBar frame];
-                frame.origin.y = [UIScreen mainScreen].bounds.size.height;
-                frame.size.height = 0;
-                [tabBar setValue:[NSValue valueWithCGRect:frame] forKey:@"frame"];
-            } else {
-                // 恢复默认位置
-                CGRect frame = [tabBar frame];
-                frame.origin.y = [UIScreen mainScreen].bounds.size.height - 83;  // 估计高度
-                frame.size.height = 83;
-                [tabBar setValue:[NSValue valueWithCGRect:frame] forKey:@"frame"];
-            }
-            HongGuoWriteLog(@"TabBar hidden: %d, frame: %@", hide, NSStringFromCGRect([tabBar frame]));
-        } else {
-            HongGuoWriteLog(@"tabBar is nil");
-        }
+
+    UITabBarController *tab = (UITabBarController *)root;
+    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    
+    // 隐藏/显示 tabBar
+    tab.tabBar.hidden = hide;
+    if (hide) {
+        // 将 tabBar 移出屏幕底部
+        CGRect frame = tab.tabBar.frame;
+        frame.origin.y = [UIScreen mainScreen].bounds.size.height;
+        frame.size.height = 0;
+        tab.tabBar.frame = frame;
     } else {
-        HongGuoWriteLog(@"SSTabBarController not found");
+        // 恢复默认位置（假设高度 83）
+        CGRect frame = tab.tabBar.frame;
+        frame.origin.y = [UIScreen mainScreen].bounds.size.height - 83;
+        frame.size.height = 83;
+        tab.tabBar.frame = frame;
     }
+
+    // 调整根视图高度，填充底部空白
+    tab.view.frame = [UIScreen mainScreen].bounds;
+
+    // 调整内容视图（通常是第一个子视图）的高度
+    for (UIView *subview in tab.view.subviews) {
+        // 跳过 tabBar 本身
+        if ([subview isKindOfClass:[UITabBar class]]) continue;
+        // 调整内容容器高度
+        CGRect frame = subview.frame;
+        frame.size.height = tab.view.bounds.size.height - (hide ? 0 : 83);
+        subview.frame = frame;
+    }
+
+    WriteLog(@"TabBar hidden: %d, root view frame: %@", hide, NSStringFromCGRect(tab.view.frame));
 }
 
 + (void)applyFullscreen {
-    HongGuoWriteLog(@"applyFullscreen");
+    WriteLog(@"applyFullscreen");
     UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) {
-        HongGuoWriteLog(@"No window");
-        return;
-    }
+    if (!keyWindow) return;
+
     UIViewController *root = keyWindow.rootViewController;
-    // 找到当前显示的控制器（可能是导航控制器中的首页）
-    UIViewController *topVC = root;
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
-    if ([topVC isKindOfClass:[UINavigationController class]]) {
-        topVC = [(UINavigationController *)topVC topViewController];
-    }
-    // 如果是首页控制器，全屏其 view
+    Class tabClass = NSClassFromString(@"SSTabBarController");
+    if (!tabClass || ![root isKindOfClass:tabClass]) return;
+
+    UITabBarController *tab = (UITabBarController *)root;
+    UIViewController *selected = tab.selectedViewController;
     Class feedClass = NSClassFromString(@"SSVideoSeriesFeedViewController");
-    if (feedClass && [topVC isKindOfClass:feedClass]) {
-        topVC.view.frame = [UIScreen mainScreen].bounds;
-        HongGuoWriteLog(@"Set feed view frame to fullscreen");
+    if (feedClass && [selected isKindOfClass:feedClass]) {
+        // 只对首页（视频列表）全屏
+        selected.view.frame = [UIScreen mainScreen].bounds;
+        WriteLog(@"Set feed view to fullscreen");
     } else {
-        HongGuoWriteLog(@"Top VC is not feed: %@", NSStringFromClass([topVC class]));
+        WriteLog(@"Selected view controller is not SSVideoSeriesFeedViewController: %@", NSStringFromClass([selected class]));
     }
 }
 
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window {
     UIViewController *top = window.rootViewController;
-    while (top.presentedViewController) {
-        top = top.presentedViewController;
-    }
+    while (top.presentedViewController) top = top.presentedViewController;
     UIAlertController *toast = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
     [top presentViewController:toast animated:YES completion:nil];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -273,19 +161,18 @@ static void HongGuoDiagnose() {
 @end
 
 // =============================================
-// Hook UIWindow 添加手势（三指）
+// Hook UIWindow：三指长按手势
 // =============================================
 %hook UIWindow
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = %orig;
     if (self) {
-        // 改为三指长按（避免与 FLEX 冲突）
         UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hongguo_handleLongPress:)];
-        gesture.numberOfTouchesRequired = 3;
+        gesture.numberOfTouchesRequired = 3;      // 三指
         gesture.minimumPressDuration = 0.8;
         [self addGestureRecognizer:gesture];
-        HongGuoWriteLog(@"UIWindow initialized, added 3-finger gesture");
+        WriteLog(@"UIWindow initialized, added 3-finger gesture");
     }
     return self;
 }
@@ -293,23 +180,63 @@ static void HongGuoDiagnose() {
 %new
 - (void)hongguo_handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
-    HongGuoWriteLog(@"3-finger long press detected");
-    // 显示诊断日志已生成
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"手势触发" message:@"正在生成诊断日志..." preferredStyle:UIAlertControllerStyleAlert];
-    UIViewController *top = self.rootViewController;
-    while (top.presentedViewController) {
-        top = top.presentedViewController;
+    WriteLog(@"3-finger long press detected");
+    [HongGuoHelper showSettingsMenuFromWindow:self];
+}
+
+%end
+
+// =============================================
+// Hook SSTabBarController：确保底栏隐藏生效
+// =============================================
+%hook SSTabBarController
+
+- (void)viewDidLoad {
+    %orig;
+    WriteLog(@"SSTabBarController viewDidLoad");
+    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    if (hide) {
+        self.tabBar.hidden = YES;
+        self.tabBar.frame = CGRectMake(0, self.view.bounds.size.height, 0, 0);
     }
-    [top presentViewController:alert animated:YES completion:^{
-        // 执行诊断
-        HongGuoDiagnose();
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [alert dismissViewControllerAnimated:YES completion:^{
-                // 然后打开设置菜单
-                [HongGuoHelper showSettingsMenuFromWindow:self];
-            }];
-        });
-    }];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    WriteLog(@"SSTabBarController viewWillAppear");
+    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    if (hide) {
+        self.tabBar.hidden = YES;
+        self.tabBar.frame = CGRectMake(0, self.view.bounds.size.height, 0, 0);
+    }
+}
+
+%end
+
+// =============================================
+// Hook SSVideoSeriesFeedViewController：全屏
+// =============================================
+%hook SSVideoSeriesFeedViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    WriteLog(@"SSVideoSeriesFeedViewController viewWillAppear");
+    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
+    if (full) {
+        self.view.frame = [UIScreen mainScreen].bounds;
+        // 如果父视图是 SSTabBarController，也调整其 view
+        if ([self.parentViewController isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
+            self.parentViewController.view.frame = [UIScreen mainScreen].bounds;
+        }
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
+    if (full) {
+        self.view.frame = [UIScreen mainScreen].bounds;
+    }
 }
 
 %end
@@ -319,10 +246,9 @@ static void HongGuoDiagnose() {
 // =============================================
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
-        HongGuoWriteLog(@"HongGuoFullScreen loaded");
-        // 延迟一下再诊断，确保视图完全加载
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            HongGuoDiagnose();
+        WriteLog(@"HongGuoFullScreen loaded");
+        // 延迟应用设置，确保视图已加载
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [HongGuoHelper applyTabBarVisibility];
             [HongGuoHelper applyFullscreen];
         });
