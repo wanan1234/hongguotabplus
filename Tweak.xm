@@ -1,10 +1,9 @@
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <objc/runtime.h>
-#import <sys/stat.h>
 
 // =============================================
-// 诊断工具
+// 诊断工具 - 写入 /tmp/ 确保可写
 // =============================================
 static void HongGuoWriteLog(NSString *format, ...) {
     va_list args;
@@ -12,24 +11,29 @@ static void HongGuoWriteLog(NSString *format, ...) {
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
     
-    NSString *logPath = @"/var/mobile/Documents/HongGuoDiagnostic.log";
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:@"/var/mobile/Documents"]) {
-        [fm createDirectoryAtPath:@"/var/mobile/Documents" withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    
-    NSDateFormatter *df = [[NSDateFormatter alloc] init];
-    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
-    NSString *timestamp = [df stringFromDate:[NSDate date]];
-    NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
-    
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) {
-        [logLine writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [fh seekToEndOfFile];
-        [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
+    // 同时写入 /tmp/ 和 /var/mobile/Documents/
+    NSArray *paths = @[@"/tmp/HongGuoDiagnostic.log", @"/var/mobile/Documents/HongGuoDiagnostic.log"];
+    for (NSString *path in paths) {
+        // 确保目录存在
+        NSString *dir = [path stringByDeletingLastPathComponent];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (![fm fileExistsAtPath:dir]) {
+            [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        }
+        
+        NSDateFormatter *df = [[NSDateFormatter alloc] init];
+        df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+        NSString *timestamp = [df stringFromDate:[NSDate date]];
+        NSString *logLine = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
+        
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) {
+            [logLine writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } else {
+            [fh seekToEndOfFile];
+            [fh writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
     }
 }
 
@@ -168,7 +172,7 @@ static void HongGuoDiagnose() {
                 frame.size.height = 0;
                 [tabBar setValue:[NSValue valueWithCGRect:frame] forKey:@"frame"];
             } else {
-                // 恢复默认
+                // 恢复默认（假设高度为83）
                 CGRect frame = [tabBar frame];
                 frame.origin.y = [UIScreen mainScreen].bounds.size.height - 83;
                 frame.size.height = 83;
@@ -223,7 +227,7 @@ static void HongGuoDiagnose() {
 @end
 
 // =============================================
-// Hook UIWindow 添加手势
+// Hook UIWindow 添加手势 - 改为三指长按
 // =============================================
 %hook UIWindow
 
@@ -231,10 +235,10 @@ static void HongGuoDiagnose() {
     self = %orig;
     if (self) {
         UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hongguo_handleLongPress:)];
-        gesture.numberOfTouchesRequired = 2;
+        gesture.numberOfTouchesRequired = 3;  // 改为三指
         gesture.minimumPressDuration = 0.8;
         [self addGestureRecognizer:gesture];
-        HongGuoWriteLog(@"UIWindow initialized, added gesture");
+        HongGuoWriteLog(@"UIWindow initialized, added 3-finger long press gesture");
     }
     return self;
 }
@@ -242,8 +246,8 @@ static void HongGuoDiagnose() {
 %new
 - (void)hongguo_handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
-    HongGuoWriteLog(@"Long press detected");
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"手势触发" message:@"双指长按成功" preferredStyle:UIAlertControllerStyleAlert];
+    HongGuoWriteLog(@"3-finger long press detected");
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"手势触发" message:@"三指长按成功" preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [HongGuoHelper showSettingsMenuFromWindow:self];
     }]];
@@ -260,8 +264,9 @@ static void HongGuoDiagnose() {
 // 构造函数
 // =============================================
 %ctor {
+    HongGuoWriteLog(@"HongGuoFullScreen loaded - %s", __FILE__);
     dispatch_async(dispatch_get_main_queue(), ^{
-        HongGuoWriteLog(@"HongGuoFullScreen loaded");
+        HongGuoWriteLog(@"Running on main queue");
         HongGuoDiagnose();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [HongGuoHelper applyTabBarVisibility];
