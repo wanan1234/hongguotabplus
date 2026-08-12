@@ -3,13 +3,22 @@
 #import <objc/runtime.h>
 
 // =============================================
-// 日志工具（写入 Documents）
+// 日志工具（写入 Documents，带节流）
 // =============================================
+static NSMutableSet *loggedMessages = nil;
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
+
+    // 只记录新消息（避免重复）
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        loggedMessages = [NSMutableSet set];
+    });
+    if ([loggedMessages containsObject:msg]) return;
+    [loggedMessages addObject:msg];
 
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *documentsDirectory = [paths firstObject] ?: @"/var/mobile/Documents";
@@ -37,12 +46,12 @@ static void WriteLog(NSString *format, ...) {
 }
 
 // =============================================
-// 辅助类：基于视图遍历的方案
+// 辅助类：直接操作 TabBarController 和视频控制器
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
-+ (void)applySettings;
-+ (void)traverseViews:(UIView *)view depth:(NSInteger)depth;
++ (void)applyTabBarVisibility:(UITabBarController *)tab;
++ (void)applyFullscreen:(UIViewController *)vc;
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window;
 + (NSString *)logPath;
 @end
@@ -56,7 +65,7 @@ static void WriteLog(NSString *format, ...) {
 }
 
 + (void)showSettingsMenuFromWindow:(UIWindow *)window {
-    WriteLog(@"showSettingsMenuFromWindow called");
+    WriteLog(@"showSettingsMenuFromWindow");
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
 
@@ -72,8 +81,15 @@ static void WriteLog(NSString *format, ...) {
                                             handler:^(UIAlertAction * _Nonnull action) {
                                                 BOOL newVal = !fullscreen;
                                                 [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"HongGuoFullScreen"];
-                                                [HongGuoHelper applySettings];
-                                                [HongGuoHelper showToast:[NSString stringWithFormat:@"全屏已%@", newVal ? @"开启" : @"关闭"] fromWindow:window];
+                                                // 刷新全屏
+                                                UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
+                                                UIViewController *root = keyWindow.rootViewController;
+                                                if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
+                                                    UITabBarController *tab = (UITabBarController *)root;
+                                                    UIViewController *selected = tab.selectedViewController;
+                                                    [self applyFullscreen:selected];
+                                                }
+                                                [self showToast:[NSString stringWithFormat:@"全屏已%@", newVal ? @"开启" : @"关闭"] fromWindow:window];
                                             }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 底栏", hideTab ? @"显示" : @"隐藏"]
@@ -81,8 +97,13 @@ static void WriteLog(NSString *format, ...) {
                                             handler:^(UIAlertAction * _Nonnull action) {
                                                 BOOL newVal = !hideTab;
                                                 [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"HongGuoHideTabBar"];
-                                                [HongGuoHelper applySettings];
-                                                [HongGuoHelper showToast:[NSString stringWithFormat:@"底栏已%@", newVal ? @"隐藏" : @"显示"] fromWindow:window];
+                                                // 刷新底栏
+                                                UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
+                                                UIViewController *root = keyWindow.rootViewController;
+                                                if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
+                                                    [self applyTabBarVisibility:(UITabBarController *)root];
+                                                }
+                                                [self showToast:[NSString stringWithFormat:@"底栏已%@", newVal ? @"隐藏" : @"显示"] fromWindow:window];
                                             }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault
@@ -104,109 +125,62 @@ static void WriteLog(NSString *format, ...) {
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
-+ (void)applySettings {
-    WriteLog(@"applySettings called");
-    for (UIWindow *window in [UIApplication sharedApplication].windows) {
-        [self traverseViews:window depth:0];
++ (void)applyTabBarVisibility:(UITabBarController *)tab {
+    if (!tab) return;
+    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    WriteLog(@"applyTabBarVisibility: hide=%d", hide);
+
+    // 隐藏/显示 tabBar
+    tab.tabBar.hidden = hide;
+    if (hide) {
+        // 移出屏幕
+        CGRect frame = tab.tabBar.frame;
+        frame.origin.y = [UIScreen mainScreen].bounds.size.height;
+        frame.size.height = 0;
+        tab.tabBar.frame = frame;
+    } else {
+        // 恢复默认（假设高度 83）
+        CGRect frame = tab.tabBar.frame;
+        frame.origin.y = [UIScreen mainScreen].bounds.size.height - 83;
+        frame.size.height = 83;
+        tab.tabBar.frame = frame;
+    }
+
+    // 调整根视图高度，填满屏幕
+    tab.view.frame = [UIScreen mainScreen].bounds;
+
+    // 调整内容视图（第一个非 tabBar 的子视图）
+    for (UIView *subview in tab.view.subviews) {
+        if ([subview isKindOfClass:[UITabBar class]]) continue;
+        CGRect frame = subview.frame;
+        frame.size.height = tab.view.bounds.size.height - (hide ? 0 : 83);
+        subview.frame = frame;
     }
 }
 
-+ (void)traverseViews:(UIView *)view depth:(NSInteger)depth {
-    if (!view) return;
-    
-    BOOL hideTab = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-    BOOL fullscreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
++ (void)applyFullscreen:(UIViewController *)vc {
+    if (!vc) return;
+    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
+    WriteLog(@"applyFullscreen: vc=%@, full=%d", NSStringFromClass([vc class]), full);
 
-    NSString *className = NSStringFromClass([view class]);
-    
-    // ==========================================
-    // 1. 隐藏底栏所有相关视图
-    // ==========================================
-    if (hideTab) {
-        // 1.1 隐藏所有包含 "TabBar" 的视图（包括文字、按钮、背景）
-        if ([className rangeOfString:@"TabBar"].location != NSNotFound ||
-            [className isEqualToString:@"_UIBarBackground"] ||
-            [className isEqualToString:@"_UIBarBackgroundShadowView"] ||
-            [className isEqualToString:@"_UIBarBackgroundShadowContentImageView"] ||
-            [className rangeOfString:@"BarBackground"].location != NSNotFound) {
-            WriteLog(@"Hiding TabBar-related view: %@", className);
-            view.hidden = YES;
-            view.alpha = 0;
-            // 递归隐藏子视图
-            for (UIView *sub in view.subviews) {
-                sub.hidden = YES;
-                sub.alpha = 0;
+    if (full) {
+        // 只对视频控制器做全屏（通过类名判断）
+        NSString *className = NSStringFromClass([vc class]);
+        if ([className isEqualToString:@"SSVideoSeriesFeedViewController"] ||
+            [className isEqualToString:@"SSVideoFeedContainerViewController"] ||
+            [className isEqualToString:@"FQVShortVideoListViewController"]) {
+            vc.view.frame = [UIScreen mainScreen].bounds;
+            // 如果父视图存在，也调整
+            if (vc.view.superview) {
+                vc.view.superview.frame = [UIScreen mainScreen].bounds;
             }
+            WriteLog(@"Fullscreen applied to: %@", className);
+        } else {
+            WriteLog(@"Skipping fullscreen for non-video VC: %@", className);
         }
-        
-        // 1.2 隐藏底部高度在 70-100 之间的容器（很可能是底栏占位）
-        if (view.frame.size.height > 70 && view.frame.size.height < 100) {
-            CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-            if (view.frame.origin.y + view.frame.size.height >= screenHeight - 10) {
-                WriteLog(@"Hiding bottom container: %@ frame: %@", className, NSStringFromCGRect(view.frame));
-                view.hidden = YES;
-                view.alpha = 0;
-                // 调整父视图高度
-                if (view.superview) {
-                    CGRect superFrame = view.superview.frame;
-                    superFrame.size.height = screenHeight;
-                    view.superview.frame = superFrame;
-                }
-            }
-        }
-    }
-
-    // ==========================================
-    // 2. 全屏模式：只对视频/Feed 控制器做全屏
-    // ==========================================
-    if (fullscreen) {
-        // 向上查找视图控制器
-        UIResponder *responder = view;
-        while (responder && ![responder isKindOfClass:[UIViewController class]]) {
-            responder = [responder nextResponder];
-        }
-        
-        if ([responder isKindOfClass:[UIViewController class]]) {
-            UIViewController *vc = (UIViewController *)responder;
-            NSString *vcClassName = NSStringFromClass([vc class]);
-            
-            // 只对特定的视频/Feed 控制器做全屏
-            BOOL isVideoController = 
-                [vcClassName isEqualToString:@"SSVideoSeriesFeedViewController"] ||
-                [vcClassName isEqualToString:@"SSVideoFeedContainerViewController"] ||
-                [vcClassName isEqualToString:@"FQVShortVideoListViewController"] ||
-                [vcClassName rangeOfString:@"Video"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Feed"].location != NSNotFound;
-            
-            // 排除侧边栏
-            BOOL isSidebar = 
-                [vcClassName rangeOfString:@"SideBar"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Sidebar"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Drawer"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Menu"].location != NSNotFound;
-            
-            if (isVideoController && !isSidebar && vc.view) {
-                WriteLog(@"Setting fullscreen for: %@", vcClassName);
-                // 设置全屏
-                vc.view.frame = [UIScreen mainScreen].bounds;
-                vc.view.clipsToBounds = YES;
-                // 确保背景不透明，防止白屏
-                if (vc.view.backgroundColor == nil || vc.view.backgroundColor == [UIColor clearColor]) {
-                    vc.view.backgroundColor = [UIColor blackColor];
-                }
-                // 调整父视图
-                if (vc.view.superview) {
-                    vc.view.superview.frame = [UIScreen mainScreen].bounds;
-                }
-            }
-        }
-    }
-
-    // ==========================================
-    // 3. 递归遍历子视图
-    // ==========================================
-    for (UIView *sub in view.subviews) {
-        [self traverseViews:sub depth:depth + 1];
+    } else {
+        // 恢复默认（由系统控制，但我们可以重置为合理大小）
+        // 这里不主动恢复，因为系统会重新布局
     }
 }
 
@@ -234,7 +208,7 @@ static void WriteLog(NSString *format, ...) {
         gesture.numberOfTouchesRequired = 3;
         gesture.minimumPressDuration = 0.8;
         [self addGestureRecognizer:gesture];
-        WriteLog(@"UIWindow initialized, added 3-finger gesture");
+        WriteLog(@"UIWindow initialized with 3-finger gesture");
     }
     return self;
 }
@@ -249,40 +223,74 @@ static void WriteLog(NSString *format, ...) {
 %end
 
 // =============================================
-// Hook UIViewController：视图出现时应用设置
+// Hook SSTabBarController：控制底栏隐藏
 // =============================================
-%hook UIViewController
+%hook SSTabBarController
 
-- (void)viewDidAppear:(BOOL)animated {
+- (void)viewDidLoad {
     %orig;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [HongGuoHelper applySettings];
-        });
-    });
+    WriteLog(@"SSTabBarController viewDidLoad");
+    // 由于 SSTabBarController 继承自 UITabBarController，我们可以安全地将其视为 UITabBarController
+    [HongGuoHelper applyTabBarVisibility:(UITabBarController *)self];
 }
 
-- (void)viewWillLayoutSubviews {
+- (void)viewWillAppear:(BOOL)animated {
     %orig;
+    WriteLog(@"SSTabBarController viewWillAppear");
+    [HongGuoHelper applyTabBarVisibility:(UITabBarController *)self];
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    // 每次布局时重新应用，但限制日志频率
     static NSTimeInterval lastApplyTime = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - lastApplyTime > 0.1) {
+    if (now - lastApplyTime > 0.5) { // 0.5秒内只执行一次
         lastApplyTime = now;
-        [HongGuoHelper applySettings];
+        [HongGuoHelper applyTabBarVisibility:(UITabBarController *)self];
     }
 }
 
 %end
 
 // =============================================
-// 构造函数
+// Hook SSVideoSeriesFeedViewController：全屏控制
+// =============================================
+%hook SSVideoSeriesFeedViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    WriteLog(@"SSVideoSeriesFeedViewController viewWillAppear");
+    [HongGuoHelper applyFullscreen:self];
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    static NSTimeInterval lastApplyTime = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - lastApplyTime > 0.5) {
+        lastApplyTime = now;
+        [HongGuoHelper applyFullscreen:self];
+    }
+}
+
+%end
+
+// =============================================
+// 构造函数：首次加载时应用设置
 // =============================================
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
         WriteLog(@"HongGuoFullScreen loaded");
+        // 延迟应用，确保视图已加载
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [HongGuoHelper applySettings];
+            UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
+            UIViewController *root = keyWindow.rootViewController;
+            if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
+                [HongGuoHelper applyTabBarVisibility:(UITabBarController *)root];
+                UIViewController *selected = [(UITabBarController *)root selectedViewController];
+                [HongGuoHelper applyFullscreen:selected];
+            }
         });
     });
 }
