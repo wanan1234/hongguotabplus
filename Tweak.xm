@@ -2,7 +2,7 @@
 #import <substrate.h>
 
 // =============================================
-// 日志工具（写入 /var/mobile/Documents，已验证可写）
+// 日志工具（写入 /var/mobile/Documents/，巨魔设备可写）
 // =============================================
 static void WriteLog(NSString *format, ...) {
     va_list args;
@@ -10,17 +10,28 @@ static void WriteLog(NSString *format, ...) {
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
 
+    // 同时输出到控制台
+    NSLog(@"[HongGuo] %@", msg);
+
+    // 写入文件
     NSString *logPath = @"/var/mobile/Documents/HongGuo.log";
     NSFileManager *fm = [NSFileManager defaultManager];
+    // 确保目录存在
+    NSString *dir = [logPath stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
 
-    if (![fm fileExistsAtPath:logPath]) {
+    // 追加写入
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!fh) {
         [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     } else {
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
         [fh seekToEndOfFile];
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
@@ -28,13 +39,13 @@ static void WriteLog(NSString *format, ...) {
 }
 
 // =============================================
-// 辅助类
+// 辅助类：处理设置和遍历视图
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
 + (void)applySettings;
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window;
-+ (void)traverseViews:(UIView *)view;
++ (void)traverseViews:(UIView *)view depth:(NSInteger)depth;
 @end
 
 @implementation HongGuoHelper
@@ -83,23 +94,34 @@ static void WriteLog(NSString *format, ...) {
 
 + (void)applySettings {
     WriteLog(@"applySettings called");
+    // 遍历所有窗口应用设置
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
-        [self traverseViews:window];
+        [self traverseViews:window depth:0];
     }
 }
 
-+ (void)traverseViews:(UIView *)view {
++ (void)traverseViews:(UIView *)view depth:(NSInteger)depth {
     if (!view) return;
+    
+    // 深度限制，避免过深
+    if (depth > 15) return;
     
     BOOL hideTab = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
     BOOL fullscreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
 
-    // 1. 隐藏底栏：识别 UITabBar 或类名包含 "TabBar"
+    // 记录视图信息（便于调试）
+    if (depth == 0) {
+        WriteLog(@"Traversing view: %@, frame: %@", NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
+    }
+
+    // 1. 隐藏底栏：识别包含 "TabBar" 的类名（不区分大小写）
     if (hideTab) {
-        if ([view isKindOfClass:[UITabBar class]] || [NSStringFromClass([view class]) rangeOfString:@"TabBar"].location != NSNotFound) {
-            WriteLog(@"Hiding TabBar view: %@", NSStringFromClass([view class]));
+        NSString *className = NSStringFromClass([view class]);
+        if ([className rangeOfString:@"TabBar" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            WriteLog(@"Hiding TabBar view: %@", className);
             view.hidden = YES;
             view.alpha = 0;
+            // 也递归子视图
             for (UIView *sub in view.subviews) {
                 sub.hidden = YES;
                 sub.alpha = 0;
@@ -107,8 +129,9 @@ static void WriteLog(NSString *format, ...) {
         }
     }
 
-    // 2. 全屏：如果启用，尝试将视图控制器视图扩展到全屏
+    // 2. 全屏：尝试将视频视图控制器全屏
     if (fullscreen) {
+        // 查找视图所属的视图控制器
         UIResponder *responder = view;
         while (responder && ![responder isKindOfClass:[UIViewController class]]) {
             responder = [responder nextResponder];
@@ -116,16 +139,18 @@ static void WriteLog(NSString *format, ...) {
         if ([responder isKindOfClass:[UIViewController class]]) {
             UIViewController *vc = (UIViewController *)responder;
             NSString *className = NSStringFromClass([vc class]);
-            // 如果是根控制器（包含 TabBarController）或视频/Feed 控制器，则全屏
-            if ([className rangeOfString:@"TabBarController"].location != NSNotFound ||
-                [className rangeOfString:@"Video"].location != NSNotFound ||
-                [className rangeOfString:@"Feed"].location != NSNotFound ||
-                [className rangeOfString:@"Series"].location != NSNotFound) {
-                WriteLog(@"Setting fullscreen for VC: %@", className);
-                vc.view.frame = [UIScreen mainScreen].bounds;
-                // 如果父视图是 TabBarController，也调整其 view
-                if ([vc.parentViewController isKindOfClass:[UITabBarController class]]) {
-                    vc.parentViewController.view.frame = [UIScreen mainScreen].bounds;
+            // 如果控制器包含 Video/Feed/Series，且其视图不是全屏，则设置为全屏
+            if ([className rangeOfString:@"Video" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [className rangeOfString:@"Feed" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [className rangeOfString:@"Series" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                if (!CGRectEqualToRect(vc.view.frame, [UIScreen mainScreen].bounds)) {
+                    WriteLog(@"Setting fullscreen for VC: %@", className);
+                    vc.view.frame = [UIScreen mainScreen].bounds;
+                }
+                // 如果视图控制器是导航控制器，也设置其根视图
+                if ([vc isKindOfClass:[UINavigationController class]]) {
+                    UINavigationController *nav = (UINavigationController *)vc;
+                    nav.view.frame = [UIScreen mainScreen].bounds;
                 }
             }
         }
@@ -133,7 +158,7 @@ static void WriteLog(NSString *format, ...) {
 
     // 递归子视图
     for (UIView *sub in view.subviews) {
-        [self traverseViews:sub];
+        [self traverseViews:sub depth:depth+1];
     }
 }
 
@@ -160,7 +185,7 @@ static void WriteLog(NSString *format, ...) {
     self = %orig;
     if (self) {
         UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hongguo_handleLongPress:)];
-        gesture.numberOfTouchesRequired = 3;      // 改为三指
+        gesture.numberOfTouchesRequired = 3;
         gesture.minimumPressDuration = 0.8;
         [self addGestureRecognizer:gesture];
         WriteLog(@"UIWindow initialized, added 3-finger gesture");
@@ -178,7 +203,7 @@ static void WriteLog(NSString *format, ...) {
 %end
 
 // =============================================
-// Hook UIViewController：在视图出现后应用设置，并监听布局变化
+// Hook UIViewController：在视图出现后应用设置
 // =============================================
 %hook UIViewController
 
@@ -195,18 +220,24 @@ static void WriteLog(NSString *format, ...) {
 
 - (void)viewWillLayoutSubviews {
     %orig;
-    // 每次布局时重新应用（确保全屏和隐藏底栏生效）
-    [HongGuoHelper applySettings];
+    // 每次布局时重新应用（确保全屏和隐藏生效）
+    // 但为了防止频繁调用，限制频率
+    static NSTimeInterval lastApplyTime = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - lastApplyTime > 0.5) {
+        lastApplyTime = now;
+        [HongGuoHelper applySettings];
+    }
 }
 
 %end
 
 // =============================================
-// 构造函数
+// 构造函数：应用保存的设置
 // =============================================
 %ctor {
-    WriteLog(@"HongGuoFullScreen loaded");
     dispatch_async(dispatch_get_main_queue(), ^{
+        WriteLog(@"HongGuoFullScreen loaded");
         [HongGuoHelper applySettings];
     });
 }
