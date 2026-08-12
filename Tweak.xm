@@ -2,7 +2,7 @@
 #import <substrate.h>
 
 // =============================================
-// 辅助类：封装所有功能逻辑
+// 辅助类：封装所有功能逻辑（纯 Objective-C）
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
@@ -26,6 +26,7 @@
                                                                    message:[NSString stringWithFormat:@"全屏：%@\n隐藏底栏：%@", fullscreen ? @"开" : @"关", hideTab ? @"开" : @"关"]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
+    // 切换全屏
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 全屏", fullscreen ? @"关闭" : @"开启"]
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
@@ -35,6 +36,7 @@
                                                 [HongGuoHelper showToast:[NSString stringWithFormat:@"全屏已%@", newVal ? @"开启" : @"关闭"] fromWindow:window];
                                             }]];
 
+    // 切换隐藏底栏
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 底栏", hideTab ? @"显示" : @"隐藏"]
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
@@ -46,6 +48,7 @@
 
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
 
+    // iPad 适配
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
         alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
@@ -121,10 +124,8 @@
 %end
 
 // =============================================
-// 使用 %group 包裹红果的 Hook，动态初始化
+// Hook SSTabBarController（如果类存在）
 // =============================================
-%group HongGuoGroup
-
 %hook SSTabBarController
 
 - (void)viewDidLoad {
@@ -147,6 +148,9 @@
 
 %end
 
+// =============================================
+// Hook SSVideoSeriesFeedViewController（如果类存在）
+// =============================================
 %hook SSVideoSeriesFeedViewController
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -170,18 +174,12 @@
 
 %end
 
-%end // group
-
 // =============================================
-// 构造函数：应用设置并动态初始化 group
+// 构造函数：应用保存的设置（无需 %init）
 // =============================================
 %ctor {
-    // 应用保存的设置
-    [HongGuoHelper applyTabBarVisibility];
-    [HongGuoHelper applyFullscreen];
-
-    // 检测类是否存在，如果存在则初始化 group
-    if (NSClassFromString(@"SSTabBarController") && NSClassFromString(@"SSVideoSeriesFeedViewController")) {
-        %init(HongGuoGroup);
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [HongGuoHelper applyTabBarVisibility];
+        [HongGuoHelper applyFullscreen];
+    });
 }
