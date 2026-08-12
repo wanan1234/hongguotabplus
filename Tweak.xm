@@ -2,7 +2,7 @@
 #import <substrate.h>
 
 // =============================================
-// 双指长按弹出设置菜单
+// 双指长按弹出设置菜单（直接 hook UIWindow）
 // =============================================
 %hook UIWindow
 
@@ -81,8 +81,6 @@
     UIViewController *root = [self rootViewController];
     if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
         UITabBarController *tab = (UITabBarController *)root;
-        UIViewController *selected = tab.selectedViewController;
-        // 遍历所有子控制器，调整其视图
         for (UIViewController *vc in tab.viewControllers) {
             if ([vc isKindOfClass:NSClassFromString(@"SSVideoSeriesFeedViewController")]) {
                 vc.view.frame = [UIScreen mainScreen].bounds;
@@ -107,8 +105,10 @@
 %end
 
 // =============================================
-// Hook SSTabBarController
+// 使用 %group 动态 Hook 红果的类（兼容类不存在的情况）
 // =============================================
+%group HongGuoGroup
+
 %hook SSTabBarController
 
 - (void)viewDidLoad {
@@ -131,9 +131,6 @@
 
 %end
 
-// =============================================
-// Hook 首页控制器
-// =============================================
 %hook SSVideoSeriesFeedViewController
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -156,3 +153,12 @@
 }
 
 %end
+
+%end // group
+
+%ctor {
+    // 动态检测类是否存在，若存在则初始化 group
+    if (NSClassFromString(@"SSTabBarController") && NSClassFromString(@"SSVideoSeriesFeedViewController")) {
+        %init(HongGuoGroup);
+    }
+}
