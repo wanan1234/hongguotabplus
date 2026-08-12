@@ -8,7 +8,7 @@
 static void WriteLog(NSString *format, ...) {
     static NSTimeInterval lastLogTime = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - lastLogTime < 0.5) return; // 0.5秒内只记录一次
+    if (now - lastLogTime < 0.5) return;
     lastLogTime = now;
 
     va_list args;
@@ -42,12 +42,13 @@ static void WriteLog(NSString *format, ...) {
 }
 
 // =============================================
-// 辅助类：核心功能
+// 辅助类：功能实现
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
 + (void)applySettings;
-+ (void)traverseViews:(UIView *)view;
++ (void)traverseViews:(UIView *)view depth:(NSInteger)depth;
++ (void)traverseViewControllers:(UIViewController *)vc;
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window;
 + (NSString *)logPath;
 @end
@@ -58,10 +59,6 @@ static void WriteLog(NSString *format, ...) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *documentsDirectory = [paths firstObject] ?: @"/var/mobile/Documents";
     return [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
-}
-
-+ (UIViewController *)rootViewController {
-    return [UIApplication sharedApplication].windows.firstObject.rootViewController;
 }
 
 + (void)showSettingsMenuFromWindow:(UIWindow *)window {
@@ -115,29 +112,37 @@ static void WriteLog(NSString *format, ...) {
 
 + (void)applySettings {
     WriteLog(@"applySettings");
+    // 遍历所有窗口的视图树
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
-        [self traverseViews:window];
+        [self traverseViews:window depth:0];
+        // 遍历窗口的视图控制器层级
+        if (window.rootViewController) {
+            [self traverseViewControllers:window.rootViewController];
+        }
     }
 }
 
-+ (void)traverseViews:(UIView *)view {
+// 递归遍历视图树（类似 DYYY 的 PPTransparentizeViews）
++ (void)traverseViews:(UIView *)view depth:(NSInteger)depth {
     if (!view) return;
+    if (depth > 20) return; // 防止死循环
 
     BOOL hideTab = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
     BOOL fullscreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
 
     NSString *className = NSStringFromClass([view class]);
 
-    // ============================
-    // 1. 隐藏底栏
-    // ============================
+    // ==========================================
+    // 1. 隐藏底栏：找到所有 TabBar 相关视图
+    // ==========================================
     if (hideTab) {
-        // 1.1 隐藏所有包含 "TabBar" 的视图（包括文字、按钮、背景）
-        if ([className rangeOfString:@"TabBar"].location != NSNotFound) {
+        // 1.1 隐藏所有包含 "TabBar" 的视图
+        if ([className rangeOfString:@"TabBar"].location != NSNotFound ||
+            [className rangeOfString:@"tabbar"].location != NSNotFound) {
             WriteLog(@"Hiding TabBar view: %@", className);
             view.hidden = YES;
             view.alpha = 0;
-            // 也隐藏子视图
+            // 递归隐藏子视图
             for (UIView *sub in view.subviews) {
                 sub.hidden = YES;
                 sub.alpha = 0;
@@ -147,48 +152,57 @@ static void WriteLog(NSString *format, ...) {
         // 1.2 隐藏底栏背景（_UIBarBackground 等）
         if ([className isEqualToString:@"_UIBarBackground"] ||
             [className isEqualToString:@"_UIBarBackgroundShadowView"] ||
-            [className isEqualToString:@"_UIBarBackgroundShadowContentImageView"] ||
-            [className rangeOfString:@"BarBackground"].location != NSNotFound) {
+            [className isEqualToString:@"_UIBarBackgroundShadowContentImageView"]) {
             WriteLog(@"Hiding background: %@", className);
             view.hidden = YES;
             view.alpha = 0;
         }
 
-        // 1.3 如果有高度约 84 且位于底部的视图（可能是容器），调整其父视图高度
-        if (view.frame.size.height > 70 && view.frame.size.height < 100) {
-            CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-            if (view.frame.origin.y + view.frame.size.height >= screenHeight - 10) {
-                WriteLog(@"Adjusting bottom container: %@", className);
-                UIView *parent = view.superview;
-                if (parent) {
-                    CGRect frame = parent.frame;
-                    frame.size.height = screenHeight;
-                    parent.frame = frame;
-                }
+        // 1.3 隐藏底部可能存在的容器（高度 80-90，位于屏幕底部）
+        CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+        if (view.frame.size.height > 70 && view.frame.size.height < 100 &&
+            view.frame.origin.y + view.frame.size.height >= screenHeight - 20) {
+            WriteLog(@"Hiding bottom container: %@ frame=%@", className, NSStringFromCGRect(view.frame));
+            view.hidden = YES;
+            view.alpha = 0;
+            // 调整父视图高度
+            if (view.superview) {
+                CGRect superFrame = view.superview.frame;
+                superFrame.size.height = screenHeight;
+                view.superview.frame = superFrame;
             }
         }
     }
 
-    // ============================
-    // 2. 全屏：仅对 SSVideoSeriesFeedViewController 的视图
-    // ============================
+    // ==========================================
+    // 2. 全屏：调整视图 frame
+    // ==========================================
     if (fullscreen) {
-        // 向上查找视图控制器
+        // 只对 SSVideoSeriesFeedViewController 的 view 做全屏
         UIResponder *responder = view;
         while (responder && ![responder isKindOfClass:[UIViewController class]]) {
             responder = [responder nextResponder];
         }
-
         if ([responder isKindOfClass:[UIViewController class]]) {
             UIViewController *vc = (UIViewController *)responder;
-            NSString *vcClassName = NSStringFromClass([vc class]);
+            if ([NSStringFromClass([vc class]) isEqualToString:@"SSVideoSeriesFeedViewController"] ||
+                [NSStringFromClass([vc class]) isEqualToString:@"SSVideoFeedContainerViewController"]) {
+                // 只对视频 feed 控制器做全屏，且只调整一次
+                static NSMutableSet *adjustedViews = nil;
+                static dispatch_once_t onceToken;
+                dispatch_once(&onceToken, ^{
+                    adjustedViews = [NSMutableSet set];
+                });
 
-            // 只对 SSVideoSeriesFeedViewController 全屏
-            if ([vcClassName isEqualToString:@"SSVideoSeriesFeedViewController"]) {
-                WriteLog(@"Setting fullscreen for: %@", vcClassName);
-                vc.view.frame = [UIScreen mainScreen].bounds;
-                if (vc.view.superview) {
-                    vc.view.superview.frame = [UIScreen mainScreen].bounds;
+                if (![adjustedViews containsObject:view]) {
+                    WriteLog(@"Setting fullscreen for view: %@", className);
+                    view.frame = [UIScreen mainScreen].bounds;
+                    [adjustedViews addObject:view];
+                    // 也调整父视图
+                    if (view.superview) {
+                        view.superview.frame = [UIScreen mainScreen].bounds;
+                        [adjustedViews addObject:view.superview];
+                    }
                 }
             }
         }
@@ -196,7 +210,34 @@ static void WriteLog(NSString *format, ...) {
 
     // 递归遍历子视图
     for (UIView *sub in view.subviews) {
-        [self traverseViews:sub];
+        [self traverseViews:sub depth:depth + 1];
+    }
+}
+
+// 递归遍历视图控制器（只做全屏）
++ (void)traverseViewControllers:(UIViewController *)vc {
+    if (!vc) return;
+
+    BOOL fullscreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
+    if (!fullscreen) return;
+
+    NSString *className = NSStringFromClass([vc class]);
+    if ([className isEqualToString:@"SSVideoSeriesFeedViewController"] ||
+        [className isEqualToString:@"SSVideoFeedContainerViewController"]) {
+        WriteLog(@"Setting fullscreen for VC: %@", className);
+        vc.view.frame = [UIScreen mainScreen].bounds;
+        if (vc.view.superview) {
+            vc.view.superview.frame = [UIScreen mainScreen].bounds;
+        }
+    }
+
+    // 遍历子控制器
+    for (UIViewController *child in vc.childViewControllers) {
+        [self traverseViewControllers:child];
+    }
+    // 遍历 presented 控制器
+    if (vc.presentedViewController) {
+        [self traverseViewControllers:vc.presentedViewController];
     }
 }
 
@@ -239,7 +280,7 @@ static void WriteLog(NSString *format, ...) {
 %end
 
 // =============================================
-// Hook UIViewController：应用设置
+// Hook UIViewController：在视图出现时应用设置
 // =============================================
 %hook UIViewController
 
@@ -255,10 +296,10 @@ static void WriteLog(NSString *format, ...) {
 
 - (void)viewWillLayoutSubviews {
     %orig;
-    static NSTimeInterval lastApply = 0;
+    static NSTimeInterval lastApplyTime = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - lastApply > 0.2) {
-        lastApply = now;
+    if (now - lastApplyTime > 0.3) {
+        lastApplyTime = now;
         [HongGuoHelper applySettings];
     }
 }
