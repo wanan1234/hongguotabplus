@@ -1,37 +1,35 @@
 name: Build HongGuo Tweak
 
 on:
+  workflow_dispatch:  # 允许手动触发
   push:
-    branches: [ main ]
-  # 可选：当创建 Release 时也触发构建
-  # release:
-  #   types: [ published ]
+    branches: [ main, master ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest   # 关键：使用 macOS runner
     steps:
-      - name: Checkout code
+      - name: 拉取代码
         uses: actions/checkout@v4
 
-      # 核心：使用 theos-action 一键配置环境
-      - name: Install Theos
-        uses: Randomblock1/theos-action@v1
-        with:
-          # 指定 Theos 的安装路径
-          theos-dir: 'theos'
-          # 指定 SDK 仓库地址
-          theos-sdks: 'https://github.com/theos/sdks'
+      - name: 选择 Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      # 构建插件
-      - name: Build package
+      - name: 安装 Theos 依赖
         run: |
-          # 让 make 命令能找到 Theos
-          export THEOS=$(pwd)/theos
-          make package
+          brew install dpkg || true
+          brew install ldid || true
+          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
 
-      # 上传生成的 .deb 包
-      - name: Upload deb
+      - name: 编译并打包 .deb
+        env:
+          THEOS: ${{ github.workspace }}/theos
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
+        run: |
+          export THEOS="$HOME/theos"
+          make package FINALPACKAGE=1
+
+      - name: 上传 .deb 产物
         uses: actions/upload-artifact@v4
         with:
           name: HongGuoFullScreen.deb
