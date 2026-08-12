@@ -37,7 +37,7 @@ static void WriteLog(NSString *format, ...) {
 }
 
 // =============================================
-// 辅助类：功能实现（基于递归遍历）
+// 辅助类：基于最早能工作的版本
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
@@ -106,7 +106,6 @@ static void WriteLog(NSString *format, ...) {
 
 + (void)applySettings {
     WriteLog(@"applySettings called");
-    // 遍历所有窗口
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
         [self traverseViews:window depth:0];
     }
@@ -121,10 +120,10 @@ static void WriteLog(NSString *format, ...) {
     NSString *className = NSStringFromClass([view class]);
     
     // ==========================================
-    // 1. 隐藏底栏相关视图（包括背景）
+    // 1. 隐藏底栏相关视图（包括背景和容器）
     // ==========================================
     if (hideTab) {
-        // 隐藏所有包含 "TabBar" 的视图
+        // 1.1 隐藏所有包含 "TabBar" 的视图（包括文字和按钮）
         if ([className rangeOfString:@"TabBar"].location != NSNotFound) {
             WriteLog(@"Hiding TabBar view: %@", className);
             view.hidden = YES;
@@ -135,28 +134,35 @@ static void WriteLog(NSString *format, ...) {
             }
         }
         
-        // 隐藏底栏背景（_UIBarBackground 或类似的）
+        // 1.2 隐藏底栏背景（_UIBarBackground 及其子视图）
         if ([className isEqualToString:@"_UIBarBackground"] || 
+            [className isEqualToString:@"_UIBarBackgroundShadowView"] ||
+            [className isEqualToString:@"_UIBarBackgroundShadowContentImageView"] ||
             [className rangeOfString:@"BarBackground"].location != NSNotFound) {
             WriteLog(@"Hiding background view: %@", className);
             view.hidden = YES;
             view.alpha = 0;
         }
         
-        // 隐藏可能的占位容器（高度接近 tabBar 高度的视图）
-        if (view.frame.size.height > 40 && view.frame.size.height < 100) {
-            // 检查它是不是在底部
+        // 1.3 隐藏底部可能存在的容器视图（高度 80-90，位于屏幕底部）
+        if (view.frame.size.height > 70 && view.frame.size.height < 100) {
             CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
             if (view.frame.origin.y + view.frame.size.height >= screenHeight - 10) {
-                WriteLog(@"Hiding bottom view: %@ frame: %@", className, NSStringFromCGRect(view.frame));
+                WriteLog(@"Hiding bottom container: %@ frame: %@", className, NSStringFromCGRect(view.frame));
                 view.hidden = YES;
                 view.alpha = 0;
+                // 调整父视图高度，填充空白
+                if (view.superview) {
+                    CGRect superFrame = view.superview.frame;
+                    superFrame.size.height = screenHeight;
+                    view.superview.frame = superFrame;
+                }
             }
         }
     }
 
     // ==========================================
-    // 2. 全屏：只对视频播放相关的视图控制器生效
+    // 2. 全屏：只对视频/Feed 控制器生效，排除侧边栏
     // ==========================================
     if (fullscreen) {
         // 向上查找视图控制器
@@ -169,30 +175,30 @@ static void WriteLog(NSString *format, ...) {
             UIViewController *vc = (UIViewController *)responder;
             NSString *vcClassName = NSStringFromClass([vc class]);
             
-            // 只对特定的视频/Feed 控制器做全屏（避免侧边栏被全屏）
+            // 只对特定的视频/Feed 控制器做全屏
             BOOL isVideoController = 
+                [vcClassName isEqualToString:@"SSVideoSeriesFeedViewController"] ||
+                [vcClassName isEqualToString:@"SSVideoFeedContainerViewController"] ||
+                [vcClassName isEqualToString:@"FQVShortVideoListViewController"] ||
                 [vcClassName rangeOfString:@"Video"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Feed"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Series"].location != NSNotFound;
+                [vcClassName rangeOfString:@"Feed"].location != NSNotFound;
             
-            // 排除侧边栏/抽屉控制器
+            // 排除侧边栏/抽屉/菜单控制器
             BOOL isSidebarController = 
+                [vcClassName rangeOfString:@"SideBar"].location != NSNotFound ||
                 [vcClassName rangeOfString:@"Sidebar"].location != NSNotFound ||
                 [vcClassName rangeOfString:@"Drawer"].location != NSNotFound ||
-                [vcClassName rangeOfString:@"Menu"].location != NSNotFound;
+                [vcClassName rangeOfString:@"Menu"].location != NSNotFound ||
+                [vcClassName rangeOfString:@"侧边"].location != NSNotFound;
             
             if (isVideoController && !isSidebarController && vc.view) {
                 WriteLog(@"Setting fullscreen for: %@", vcClassName);
                 vc.view.frame = [UIScreen mainScreen].bounds;
+                // 如果父视图存在，也调整
+                if (vc.view.superview) {
+                    vc.view.superview.frame = [UIScreen mainScreen].bounds;
+                }
             }
-        }
-        
-        // 对于视图本身，如果它是视频播放器视图，也设置全屏
-        if ([className rangeOfString:@"Player"].location != NSNotFound ||
-            [className rangeOfString:@"VideoView"].location != NSNotFound ||
-            [className rangeOfString:@"RenderView"].location != NSNotFound) {
-            WriteLog(@"Setting fullscreen for view: %@", className);
-            view.frame = [UIScreen mainScreen].bounds;
         }
     }
 
@@ -259,10 +265,10 @@ static void WriteLog(NSString *format, ...) {
 
 - (void)viewWillLayoutSubviews {
     %orig;
-    // 每次布局时重新应用（确保全屏/隐藏生效）
+    // 每次布局时重新应用
     static NSTimeInterval lastApplyTime = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - lastApplyTime > 0.1) { // 限流，避免频繁调用
+    if (now - lastApplyTime > 0.1) {
         lastApplyTime = now;
         [HongGuoHelper applySettings];
     }
