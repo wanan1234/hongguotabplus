@@ -3,8 +3,9 @@ name: Build HongGuo Tweak
 on:
   push:
     branches: [ main ]
-  release:
-    types: [ published ]
+  # 可选：当创建 Release 时也触发构建
+  # release:
+  #   types: [ published ]
 
 jobs:
   build:
@@ -13,27 +14,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git curl unzip wget dpkg-dev perl
+      # 核心：使用 theos-action 一键配置环境
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+        with:
+          # 指定 Theos 的安装路径
+          theos-dir: 'theos'
+          # 指定 SDK 仓库地址
+          theos-sdks: 'https://github.com/theos/sdks'
 
-      - name: Install Theos (official installer)
-        run: |
-          curl -LO https://github.com/theos/installer/raw/master/install.sh
-          chmod +x install.sh
-          # 安装到 /opt/theos，避免权限问题
-          sudo ./install.sh --prefix /opt/theos
-          echo "THEOS=/opt/theos" >> $GITHUB_ENV
-          echo "/opt/theos/bin" >> $GITHUB_PATH
-          # 确保 sdks 目录存在
-          sudo mkdir -p /opt/theos/sdks
-          sudo chown -R runner:runner /opt/theos
-
+      # 构建插件
       - name: Build package
         run: |
+          # 让 make 命令能找到 Theos
+          export THEOS=$(pwd)/theos
           make package
 
+      # 上传生成的 .deb 包
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
