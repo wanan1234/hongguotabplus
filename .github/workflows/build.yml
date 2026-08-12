@@ -1,35 +1,33 @@
 name: Build HongGuo Tweak
 
 on:
-  workflow_dispatch:  # 允许手动触发
   push:
-    branches: [ main, master ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest   # 关键：使用 macOS runner
+    runs-on: macos-latest  # 使用 macOS 环境更稳定
     steps:
-      - name: 拉取代码
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 选择 Xcode
+      - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 安装 Theos 依赖
+      - name: Install Theos dependencies
         run: |
-          brew install dpkg || true
-          brew install ldid || true
+          brew install dpkg ldid
           git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
 
-      - name: 编译并打包 .deb
+      - name: Build package
         env:
-          THEOS: ${{ github.workspace }}/theos
-          HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
+          THEOS: $HOME/theos
         run: |
           export THEOS="$HOME/theos"
           make package FINALPACKAGE=1
 
-      - name: 上传 .deb 产物
+      - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
           name: HongGuoFullScreen.deb
