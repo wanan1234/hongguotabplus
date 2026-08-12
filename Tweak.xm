@@ -2,7 +2,7 @@
 #import <substrate.h>
 
 // =============================================
-// 日志工具（只记录关键操作）
+// 日志工具
 // =============================================
 static void WriteLog(NSString *format, ...) {
     va_list args;
@@ -83,7 +83,6 @@ static void WriteLog(NSString *format, ...) {
 + (void)applySettings {
     WriteLog(@"applySettings");
 
-    // 查找 SSTabBarController
     UIViewController *root = [UIApplication sharedApplication].windows.firstObject.rootViewController;
     Class tabClass = NSClassFromString(@"SSTabBarController");
     if (!tabClass) {
@@ -91,7 +90,6 @@ static void WriteLog(NSString *format, ...) {
         return;
     }
 
-    // 查找 tabController
     id tabController = nil;
     if ([root isKindOfClass:tabClass]) {
         tabController = root;
@@ -124,32 +122,28 @@ static void WriteLog(NSString *format, ...) {
     BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
 
     if (hide) {
-        // 只保留首页(索引0)和我的(索引4)
         NSArray *originalVCs = tab.viewControllers;
         if (originalVCs.count >= 5) {
             NSMutableArray *filteredVCs = [NSMutableArray array];
-            // 保留索引0和索引4
             [filteredVCs addObject:originalVCs[0]];
             [filteredVCs addObject:originalVCs[4]];
             tab.viewControllers = filteredVCs;
             
-            // 更新 tabBar items
-            NSMutableArray *items = [NSMutableArray array];
-            for (UITabBarItem *item in tab.tabBar.items) {
-                [items addObject:item];
-            }
-            if (items.count >= 5) {
-                tab.tabBar.items = @[items[0], items[4]];
-            }
+            // 强制刷新 TabBar
+            [tab.tabBar setNeedsLayout];
+            [tab.tabBar layoutIfNeeded];
+            
+            // 重新设置选中的索引
+            tab.selectedIndex = 0;
             
             WriteLog(@"TabBar精简: 只保留首页和我的");
         } else {
             WriteLog(@"TabBar items count < 5, cannot simplify");
         }
     } else {
-        // 恢复所有 Tab（需要重新加载）
-        // 由于我们无法恢复原始数据，提示用户重启应用
+        // 恢复模式：提示重启
         WriteLog(@"恢复模式需要重启应用");
+        // 可以尝试重新加载原始数据，但无法恢复，所以提示用户
     }
 }
 
@@ -203,6 +197,11 @@ static void WriteLog(NSString *format, ...) {
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    [HongGuoHelper applySettings];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
     %orig;
     [HongGuoHelper applySettings];
 }
