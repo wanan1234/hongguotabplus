@@ -2,13 +2,13 @@
 #import <substrate.h>
 
 // =============================================
-// 辅助类：封装所有功能逻辑（纯 Objective-C）
+// 辅助类：处理设置和遍历视图
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
-+ (void)applyTabBarVisibility;
-+ (void)applyFullscreen;
++ (void)applySettings;
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window;
++ (void)traverseViews:(UIView *)view;
 @end
 
 @implementation HongGuoHelper
@@ -26,29 +26,26 @@
                                                                    message:[NSString stringWithFormat:@"全屏：%@\n隐藏底栏：%@", fullscreen ? @"开" : @"关", hideTab ? @"开" : @"关"]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
-    // 切换全屏
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 全屏", fullscreen ? @"关闭" : @"开启"]
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
                                                 BOOL newVal = !fullscreen;
                                                 [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"HongGuoFullScreen"];
-                                                [HongGuoHelper applyFullscreen];
+                                                [HongGuoHelper applySettings];
                                                 [HongGuoHelper showToast:[NSString stringWithFormat:@"全屏已%@", newVal ? @"开启" : @"关闭"] fromWindow:window];
                                             }]];
 
-    // 切换隐藏底栏
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 底栏", hideTab ? @"显示" : @"隐藏"]
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction * _Nonnull action) {
                                                 BOOL newVal = !hideTab;
                                                 [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:@"HongGuoHideTabBar"];
-                                                [HongGuoHelper applyTabBarVisibility];
+                                                [HongGuoHelper applySettings];
                                                 [HongGuoHelper showToast:[NSString stringWithFormat:@"底栏已%@", newVal ? @"隐藏" : @"显示"] fromWindow:window];
                                             }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
 
-    // iPad 适配
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
         alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
@@ -57,31 +54,57 @@
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
-+ (void)applyTabBarVisibility {
-    UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
-    UIViewController *root = keyWindow.rootViewController;
-    if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
-        UITabBarController *tab = (UITabBarController *)root;
-        BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-        tab.tabBar.hidden = hide;
-        if (hide) {
-            tab.tabBar.frame = CGRectMake(0, [UIScreen mainScreen].bounds.size.height, 0, 0);
-        } else {
-            tab.tabBar.frame = CGRectMake(0, [UIScreen mainScreen].bounds.size.height - 83, [UIScreen mainScreen].bounds.size.width, 83);
-        }
++ (void)applySettings {
+    // 遍历所有窗口应用设置
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        [self traverseViews:window];
     }
 }
 
-+ (void)applyFullscreen {
-    UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
-    UIViewController *root = keyWindow.rootViewController;
-    if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
-        UITabBarController *tab = (UITabBarController *)root;
-        for (UIViewController *vc in tab.viewControllers) {
-            if ([vc isKindOfClass:NSClassFromString(@"SSVideoSeriesFeedViewController")]) {
++ (void)traverseViews:(UIView *)view {
+    if (!view) return;
+    
+    BOOL hideTab = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    BOOL fullscreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
+
+    // 1. 隐藏底栏：识别 UITabBar 或带 "TabBar" 的类名
+    if (hideTab) {
+        if ([NSStringFromClass([view class]) rangeOfString:@"TabBar"].location != NSNotFound) {
+            view.hidden = YES;
+            view.alpha = 0;
+            // 也递归子视图
+            for (UIView *sub in view.subviews) {
+                sub.hidden = YES;
+                sub.alpha = 0;
+            }
+        }
+    }
+
+    // 2. 全屏：如果启用，尝试将视图控制器视图扩展到全屏
+    if (fullscreen) {
+        UIResponder *responder = view;
+        while (responder && ![responder isKindOfClass:[UIViewController class]]) {
+            responder = [responder nextResponder];
+        }
+        if ([responder isKindOfClass:[UIViewController class]]) {
+            UIViewController *vc = (UIViewController *)responder;
+            // 如果是根控制器，且是 TabBarController 类型
+            if ([NSStringFromClass([vc class]) rangeOfString:@"TabBarController"].location != NSNotFound) {
+                vc.view.frame = [UIScreen mainScreen].bounds;
+            }
+            // 如果是视频播放控制器（包含 "Video" 或 "Feed"），也设置全屏
+            NSString *className = NSStringFromClass([vc class]);
+            if ([className rangeOfString:@"Video"].location != NSNotFound ||
+                [className rangeOfString:@"Feed"].location != NSNotFound ||
+                [className rangeOfString:@"Series"].location != NSNotFound) {
                 vc.view.frame = [UIScreen mainScreen].bounds;
             }
         }
+    }
+
+    // 递归子视图
+    for (UIView *sub in view.subviews) {
+        [self traverseViews:sub];
     }
 }
 
@@ -124,62 +147,33 @@
 %end
 
 // =============================================
-// Hook SSTabBarController（如果类存在）
+// Hook UIViewController：在视图出现后应用设置
 // =============================================
-%hook SSTabBarController
+%hook UIViewController
 
-- (void)viewDidLoad {
+- (void)viewDidAppear:(BOOL)animated {
     %orig;
-    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-    self.tabBar.hidden = hide;
-    if (hide) {
-        self.tabBar.frame = CGRectMake(0, self.view.bounds.size.height, 0, 0);
-    }
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [HongGuoHelper applySettings];
+        });
+    });
 }
 
-- (void)viewWillAppear:(BOOL)animated {
+- (void)viewWillLayoutSubviews {
     %orig;
-    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-    self.tabBar.hidden = hide;
-    if (hide) {
-        self.tabBar.frame = CGRectMake(0, self.view.bounds.size.height, 0, 0);
-    }
-}
-
-%end
-
-// =============================================
-// Hook SSVideoSeriesFeedViewController（如果类存在）
-// =============================================
-%hook SSVideoSeriesFeedViewController
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
-    if (full) {
-        self.view.frame = [UIScreen mainScreen].bounds;
-        if ([self.parentViewController isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
-            self.parentViewController.view.frame = [UIScreen mainScreen].bounds;
-        }
-    }
-}
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
-    if (full) {
-        self.view.frame = [UIScreen mainScreen].bounds;
-    }
+    // 每次布局时重新应用（确保全屏生效）
+    [HongGuoHelper applySettings];
 }
 
 %end
 
 // =============================================
-// 构造函数：应用保存的设置（无需 %init）
+// 构造函数：应用保存的设置
 // =============================================
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [HongGuoHelper applyTabBarVisibility];
-        [HongGuoHelper applyFullscreen];
+        [HongGuoHelper applySettings];
     });
 }
