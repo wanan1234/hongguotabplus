@@ -1,0 +1,9 @@
+Package: com.yourname.hongguofullscreen
+Name: 红果全屏
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 为红果短剧提供全屏、隐藏底栏等功能
+Maintainer: Your Name <your@email.com>
+Author: Your Name
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 14.0)
