@@ -3,7 +3,7 @@
 #import <objc/runtime.h>
 
 // =============================================
-// 日志工具（写入 /tmp，确保可写）
+// 日志工具（写入 /tmp）
 // =============================================
 static void WriteLog(NSString *format, ...) {
     va_list args;
@@ -29,7 +29,7 @@ static void WriteLog(NSString *format, ...) {
 }
 
 // =============================================
-// 辅助类：封装功能
+// 辅助类：功能实现（不依赖头文件，全部运行时动态）
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
@@ -39,6 +39,11 @@ static void WriteLog(NSString *format, ...) {
 @end
 
 @implementation HongGuoHelper
+
++ (UIViewController *)rootViewController {
+    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    return keyWindow.rootViewController;
+}
 
 + (void)showSettingsMenuFromWindow:(UIWindow *)window {
     WriteLog(@"showSettingsMenuFromWindow");
@@ -82,57 +87,48 @@ static void WriteLog(NSString *format, ...) {
 
 + (void)applyTabBarVisibility {
     WriteLog(@"applyTabBarVisibility");
-    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) return;
-
-    UIViewController *root = keyWindow.rootViewController;
+    UIViewController *root = [self rootViewController];
     Class tabClass = NSClassFromString(@"SSTabBarController");
     if (!tabClass || ![root isKindOfClass:tabClass]) {
         WriteLog(@"Root is not SSTabBarController");
         return;
     }
 
+    // 因为 SSTabBarController 继承自 UITabBarController，所以我们可以直接使用 tabBar 属性
     UITabBarController *tab = (UITabBarController *)root;
     BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-    
+
     // 隐藏/显示 tabBar
     tab.tabBar.hidden = hide;
     if (hide) {
-        // 将 tabBar 移出屏幕底部
         CGRect frame = tab.tabBar.frame;
         frame.origin.y = [UIScreen mainScreen].bounds.size.height;
         frame.size.height = 0;
         tab.tabBar.frame = frame;
     } else {
-        // 恢复默认位置（假设高度 83）
         CGRect frame = tab.tabBar.frame;
         frame.origin.y = [UIScreen mainScreen].bounds.size.height - 83;
         frame.size.height = 83;
         tab.tabBar.frame = frame;
     }
 
-    // 调整根视图高度，填充底部空白
+    // 调整根视图高度
     tab.view.frame = [UIScreen mainScreen].bounds;
 
-    // 调整内容视图（通常是第一个子视图）的高度
+    // 调整内容视图（第一个非 tabBar 的子视图）
     for (UIView *subview in tab.view.subviews) {
-        // 跳过 tabBar 本身
         if ([subview isKindOfClass:[UITabBar class]]) continue;
-        // 调整内容容器高度
         CGRect frame = subview.frame;
         frame.size.height = tab.view.bounds.size.height - (hide ? 0 : 83);
         subview.frame = frame;
     }
 
-    WriteLog(@"TabBar hidden: %d, root view frame: %@", hide, NSStringFromCGRect(tab.view.frame));
+    WriteLog(@"TabBar hidden: %d", hide);
 }
 
 + (void)applyFullscreen {
     WriteLog(@"applyFullscreen");
-    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) return;
-
-    UIViewController *root = keyWindow.rootViewController;
+    UIViewController *root = [self rootViewController];
     Class tabClass = NSClassFromString(@"SSTabBarController");
     if (!tabClass || ![root isKindOfClass:tabClass]) return;
 
@@ -140,11 +136,10 @@ static void WriteLog(NSString *format, ...) {
     UIViewController *selected = tab.selectedViewController;
     Class feedClass = NSClassFromString(@"SSVideoSeriesFeedViewController");
     if (feedClass && [selected isKindOfClass:feedClass]) {
-        // 只对首页（视频列表）全屏
         selected.view.frame = [UIScreen mainScreen].bounds;
-        WriteLog(@"Set feed view to fullscreen");
+        WriteLog(@"Feed view set to fullscreen");
     } else {
-        WriteLog(@"Selected view controller is not SSVideoSeriesFeedViewController: %@", NSStringFromClass([selected class]));
+        WriteLog(@"Selected is not SSVideoSeriesFeedViewController: %@", NSStringFromClass([selected class]));
     }
 }
 
@@ -169,7 +164,7 @@ static void WriteLog(NSString *format, ...) {
     self = %orig;
     if (self) {
         UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hongguo_handleLongPress:)];
-        gesture.numberOfTouchesRequired = 3;      // 三指
+        gesture.numberOfTouchesRequired = 3;
         gesture.minimumPressDuration = 0.8;
         [self addGestureRecognizer:gesture];
         WriteLog(@"UIWindow initialized, added 3-finger gesture");
@@ -187,67 +182,11 @@ static void WriteLog(NSString *format, ...) {
 %end
 
 // =============================================
-// Hook SSTabBarController：确保底栏隐藏生效
-// =============================================
-%hook SSTabBarController
-
-- (void)viewDidLoad {
-    %orig;
-    WriteLog(@"SSTabBarController viewDidLoad");
-    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-    if (hide) {
-        self.tabBar.hidden = YES;
-        self.tabBar.frame = CGRectMake(0, self.view.bounds.size.height, 0, 0);
-    }
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    WriteLog(@"SSTabBarController viewWillAppear");
-    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-    if (hide) {
-        self.tabBar.hidden = YES;
-        self.tabBar.frame = CGRectMake(0, self.view.bounds.size.height, 0, 0);
-    }
-}
-
-%end
-
-// =============================================
-// Hook SSVideoSeriesFeedViewController：全屏
-// =============================================
-%hook SSVideoSeriesFeedViewController
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    WriteLog(@"SSVideoSeriesFeedViewController viewWillAppear");
-    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
-    if (full) {
-        self.view.frame = [UIScreen mainScreen].bounds;
-        // 如果父视图是 SSTabBarController，也调整其 view
-        if ([self.parentViewController isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
-            self.parentViewController.view.frame = [UIScreen mainScreen].bounds;
-        }
-    }
-}
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    BOOL full = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreen"];
-    if (full) {
-        self.view.frame = [UIScreen mainScreen].bounds;
-    }
-}
-
-%end
-
-// =============================================
-// 构造函数
+// 构造函数：应用保存的设置
 // =============================================
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
         WriteLog(@"HongGuoFullScreen loaded");
-        // 延迟应用设置，确保视图已加载
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [HongGuoHelper applyTabBarVisibility];
             [HongGuoHelper applyFullscreen];
