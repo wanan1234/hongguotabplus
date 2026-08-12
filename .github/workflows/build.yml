@@ -1,10 +1,12 @@
+# .github/workflows/build.yml
 name: Build HongGuo Tweak
 
 on:
   push:
     branches: [ main ]
-  release:
-    types: [ published ]
+  # 可选：当你创建 Release 时也会触发构建
+  # release:
+  #   types: [ published ]
 
 jobs:
   build:
@@ -13,34 +15,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git curl unzip dpkg-dev perl
+      # 使用 theos-action 一键设置 Theos 环境
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+        with:
+          # 指定 Theos 的安装路径，默认是 'theos'
+          theos-dir: 'theos'
+          # 指定 SDK 仓库，默认是 'https://github.com/theos/sdks'
+          theos-sdks: 'https://github.com/theos/sdks'
 
-      - name: Install Theos (with submodules)
-        run: |
-          git clone --recursive --depth 1 https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "$HOME/theos/bin" >> $GITHUB_PATH
-
-      - name: Install iOS toolchain (clang)
-        run: |
-          curl -L https://github.com/theos/toolchain/releases/download/v3.0.0/ios-arm64e-clang.tar.xz -o toolchain.tar.xz
-          mkdir -p $HOME/theos/toolchain/linux/iphone
-          tar -xJf toolchain.tar.xz -C $HOME/theos/toolchain/linux/iphone --strip-components=1
-
-      - name: Install iOS SDK 14.0
-        run: |
-          curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
-          unzip sdks.zip -d $HOME/theos/sdks
-          mv $HOME/theos/sdks/sdks-master/* $HOME/theos/sdks/
-          rm -rf $HOME/theos/sdks/sdks-master
-
+      # 构建插件
       - name: Build package
         run: |
+          # 让 make 命令能找到我们刚安装的 Theos
+          export THEOS=$(pwd)/theos
           make package
 
+      # 上传生成的 .deb 包
       - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
