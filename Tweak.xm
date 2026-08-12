@@ -1,28 +1,18 @@
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 
-// =============================================
-// 日志工具
-// =============================================
+// 日志工具 (简化)
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *documentsDirectory = [paths firstObject] ?: @"/var/mobile/Documents";
     NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:documentsDirectory]) {
-        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     df.dateFormat = @"yyyy-MM-dd HH:mm:ss";
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [df stringFromDate:[NSDate date]], msg];
-
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (!fh) {
         [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -80,71 +70,84 @@ static void WriteLog(NSString *format, ...) {
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
+// 核心：遍历所有窗口，找到 UITabBar，精简按钮
 + (void)applySettings {
     WriteLog(@"applySettings");
-
-    UIViewController *root = [UIApplication sharedApplication].windows.firstObject.rootViewController;
-    Class tabClass = NSClassFromString(@"SSTabBarController");
-    if (!tabClass) {
-        WriteLog(@"SSTabBarController class not found");
+    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    if (!hide) {
+        WriteLog(@"精简模式未开启，跳过");
+        // 如果要恢复，我们可以尝试重新加载（但无法恢复原始，提示重启）
         return;
     }
 
-    id tabController = nil;
-    if ([root isKindOfClass:tabClass]) {
-        tabController = root;
-    } else {
-        for (UIViewController *child in root.childViewControllers) {
-            if ([child isKindOfClass:tabClass]) {
-                tabController = child;
-                break;
-            }
-        }
-        if (!tabController && [root isKindOfClass:[UINavigationController class]]) {
-            UINavigationController *nav = (UINavigationController *)root;
-            for (UIViewController *vc in nav.viewControllers) {
-                if ([vc isKindOfClass:tabClass]) {
-                    tabController = vc;
+    // 遍历所有窗口
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        [self processView:window];
+    }
+}
+
++ (void)processView:(UIView *)view {
+    // 找到 UITabBar
+    if ([view isKindOfClass:[UITabBar class]]) {
+        WriteLog(@"找到 UITabBar: %@", view);
+        [self simplifyTabBar:(UITabBar *)view];
+        return;
+    }
+    for (UIView *sub in view.subviews) {
+        [self processView:sub];
+    }
+}
+
++ (void)simplifyTabBar:(UITabBar *)tabBar {
+    // 获取所有按钮
+    NSArray *buttons = tabBar.subviews;
+    NSMutableArray *keepButtons = [NSMutableArray array];
+    NSArray *keepTitles = @[@"首页", @"我的"]; // 要保留的按钮标题
+
+    for (UIView *button in buttons) {
+        // 检查是否是 UITabBarButton（私有类）
+        if ([NSStringFromClass([button class]) rangeOfString:@"TabBarButton"].location != NSNotFound) {
+            // 尝试获取按钮的标题
+            NSString *title = nil;
+            // 遍历子视图查找 UILabel
+            for (UIView *sub in button.subviews) {
+                if ([sub isKindOfClass:[UILabel class]]) {
+                    title = [(UILabel *)sub text];
                     break;
                 }
             }
+            // 如果没找到，尝试用 accessibilityLabel
+            if (!title) {
+                title = button.accessibilityLabel;
+            }
+            WriteLog(@"按钮标题: %@", title);
+            // 判断是否保留
+            BOOL keep = NO;
+            for (NSString *keepTitle in keepTitles) {
+                if ([title isEqualToString:keepTitle]) {
+                    keep = YES;
+                    break;
+                }
+            }
+            if (keep) {
+                [keepButtons addObject:button];
+            } else {
+                // 隐藏并禁用交互
+                button.hidden = YES;
+                button.userInteractionEnabled = NO;
+                WriteLog(@"隐藏按钮: %@", title);
+            }
         }
     }
 
-    if (!tabController) {
-        WriteLog(@"SSTabBarController not found");
-        return;
-    }
-
-    WriteLog(@"Found SSTabBarController: %@", NSStringFromClass([tabController class]));
-
-    UITabBarController *tab = (UITabBarController *)tabController;
-    BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
-
-    if (hide) {
-        NSArray *originalVCs = tab.viewControllers;
-        if (originalVCs.count >= 5) {
-            NSMutableArray *filteredVCs = [NSMutableArray array];
-            [filteredVCs addObject:originalVCs[0]];
-            [filteredVCs addObject:originalVCs[4]];
-            tab.viewControllers = filteredVCs;
-            
-            // 强制刷新 TabBar
-            [tab.tabBar setNeedsLayout];
-            [tab.tabBar layoutIfNeeded];
-            
-            // 重新设置选中的索引
-            tab.selectedIndex = 0;
-            
-            WriteLog(@"TabBar精简: 只保留首页和我的");
-        } else {
-            WriteLog(@"TabBar items count < 5, cannot simplify");
-        }
-    } else {
-        // 恢复模式：提示重启
-        WriteLog(@"恢复模式需要重启应用");
-        // 可以尝试重新加载原始数据，但无法恢复，所以提示用户
-    }
+    // 重新布局：让保留的按钮均匀分布（简单做法：设置按钮 frame）
+    // 由于 UITabBar 的按钮布局由系统管理，我们无法直接设置 frame，
+    // 但我们可以利用 KVC 或直接修改 tabBar 的 items 数组。
+    // 更可靠的方法是修改 tabBar 的 items 属性（但需确保控制器也对应）
+    // 由于我们只是隐藏了按钮，点击事件已被禁用，但视觉上可能留下空隙。
+    // 更好的办法是重新设置 tabBar.items，只保留需要的项目（但需要知道对应的 UITabBarItem）。
+    // 这里我们暂且只隐藏，不调整布局，后续可以优化。
+    WriteLog(@"精简完成，保留了 %lu 个按钮", (unsigned long)keepButtons.count);
 }
 
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window {
@@ -186,24 +189,29 @@ static void WriteLog(NSString *format, ...) {
 %end
 
 // =============================================
-// Hook SSTabBarController
+// Hook 视图出现时应用设置
 // =============================================
-%hook SSTabBarController
-
-- (void)viewDidLoad {
-    %orig;
-    WriteLog(@"SSTabBarController viewDidLoad");
-    [HongGuoHelper applySettings];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    [HongGuoHelper applySettings];
-}
+%hook UIViewController
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    [HongGuoHelper applySettings];
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [HongGuoHelper applySettings];
+        });
+    });
+}
+
+- (void)viewWillLayoutSubviews {
+    %orig;
+    // 每次布局时重新应用，但限制频率
+    static NSTimeInterval last = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - last > 0.5) {
+        last = now;
+        [HongGuoHelper applySettings];
+    }
 }
 
 %end
@@ -214,8 +222,6 @@ static void WriteLog(NSString *format, ...) {
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
         WriteLog(@"HongGuoFullScreen loaded");
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [HongGuoHelper applySettings];
-        });
+        [HongGuoHelper applySettings];
     });
 }
