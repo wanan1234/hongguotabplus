@@ -1,45 +1,66 @@
 #import <UIKit/UIKit.h>
 #import <substrate.h>
+#import <objc/runtime.h>
 
 // =============================================
-// 日志工具（直接写入 /tmp，确保可写）
+// 日志工具（写入红果短剧的 Documents 目录）
 // =============================================
-static void WriteLog(const char *format, ...) {
+static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
-    char *msg = NULL;
-    vasprintf(&msg, format, args);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    if (!msg) return;
 
-    // 同时输出到控制台
-    NSLog(@"%s", msg);
-
-    // 写入文件
-    FILE *fp = fopen("/tmp/HongGuo.log", "a");
-    if (fp) {
-        time_t now = time(NULL);
-        struct tm *tm_info = localtime(&now);
-        char time_str[64];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
-        fprintf(fp, "[%s] %s\n", time_str, msg);
-        fflush(fp);
-        fclose(fp);
+    // 获取当前应用的 Documents 目录
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths firstObject];
+    if (!documentsDirectory) {
+        // 如果获取失败，回退到 /var/mobile/Documents
+        documentsDirectory = @"/var/mobile/Documents";
     }
-    free(msg);
+    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:documentsDirectory]) {
+        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+    NSString *timestamp = [df stringFromDate:[NSDate date]];
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!fh) {
+        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
+
+    // 同时输出到控制台，方便调试
+    NSLog(@"[HongGuo] %@", msg);
 }
 
 // =============================================
-// 辅助类：封装功能（使用运行时动态获取类）
+// 辅助类
 // =============================================
 @interface HongGuoHelper : NSObject
 + (void)showSettingsMenuFromWindow:(UIWindow *)window;
 + (void)applyTabBarVisibility;
 + (void)applyFullscreen;
 + (void)showToast:(NSString *)msg fromWindow:(UIWindow *)window;
++ (NSString *)logPath;
 @end
 
 @implementation HongGuoHelper
+
++ (NSString *)logPath {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths firstObject] ?: @"/var/mobile/Documents";
+    return [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
+}
 
 + (UIViewController *)rootViewController {
     UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
@@ -47,7 +68,7 @@ static void WriteLog(const char *format, ...) {
 }
 
 + (void)showSettingsMenuFromWindow:(UIWindow *)window {
-    WriteLog("showSettingsMenuFromWindow");
+    WriteLog(@"showSettingsMenuFromWindow called");
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
 
@@ -55,7 +76,7 @@ static void WriteLog(const char *format, ...) {
     BOOL hideTab = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果设置"
-                                                                   message:[NSString stringWithFormat:@"全屏：%@\n底栏：%@", fullscreen ? @"开" : @"关", hideTab ? @"隐藏" : @"显示"]
+                                                                   message:[NSString stringWithFormat:@"全屏：%@\n底栏：%@\n日志：%@", fullscreen ? @"开" : @"关", hideTab ? @"隐藏" : @"显示", [self logPath]]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 全屏", fullscreen ? @"关闭" : @"开启"]
@@ -76,6 +97,15 @@ static void WriteLog(const char *format, ...) {
                                                 [HongGuoHelper showToast:[NSString stringWithFormat:@"底栏已%@", newVal ? @"隐藏" : @"显示"] fromWindow:window];
                                             }]];
 
+    [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction * _Nonnull action) {
+                                                NSString *logContent = [NSString stringWithContentsOfFile:[self logPath] encoding:NSUTF8StringEncoding error:nil];
+                                                if (!logContent) logContent = @"日志文件不存在或为空";
+                                                UIAlertController *logAlert = [UIAlertController alertControllerWithTitle:@"日志内容" message:logContent preferredStyle:UIAlertControllerStyleAlert];
+                                                [logAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleDefault handler:nil]];
+                                                [topVC presentViewController:logAlert animated:YES completion:nil];
+                                            }]];
+
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
 
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
@@ -87,38 +117,39 @@ static void WriteLog(const char *format, ...) {
 }
 
 + (void)applyTabBarVisibility {
-    WriteLog("applyTabBarVisibility");
+    WriteLog(@"applyTabBarVisibility called");
     UIViewController *root = [self rootViewController];
+    WriteLog(@"root class: %@", NSStringFromClass([root class]));
+
     Class tabClass = NSClassFromString(@"SSTabBarController");
-    if (!tabClass || ![root isKindOfClass:tabClass]) {
-        WriteLog("Root is not SSTabBarController, actual: %s", NSStringFromClass([root class]).UTF8String);
+    if (!tabClass) {
+        WriteLog(@"SSTabBarController class not found");
         return;
     }
 
-    // 强制转为 UITabBarController（因为 SSTabBarController 继承自它）
+    if (![root isKindOfClass:tabClass]) {
+        WriteLog(@"Root is not SSTabBarController, actual: %@", NSStringFromClass([root class]));
+        return;
+    }
+
     UITabBarController *tab = (UITabBarController *)root;
     BOOL hide = [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoHideTabBar"];
+    WriteLog(@"hideTabBar = %d", hide);
 
-    // 隐藏/显示 tabBar
     tab.tabBar.hidden = hide;
     if (hide) {
-        // 将 tabBar 移出屏幕
         CGRect frame = tab.tabBar.frame;
         frame.origin.y = [UIScreen mainScreen].bounds.size.height;
         frame.size.height = 0;
         tab.tabBar.frame = frame;
     } else {
-        // 恢复（假设默认高度 83）
         CGRect frame = tab.tabBar.frame;
         frame.origin.y = [UIScreen mainScreen].bounds.size.height - 83;
         frame.size.height = 83;
         tab.tabBar.frame = frame;
     }
 
-    // 调整根视图高度
     tab.view.frame = [UIScreen mainScreen].bounds;
-
-    // 调整内容视图（第一个非 tabBar 的子视图）
     for (UIView *subview in tab.view.subviews) {
         if ([subview isKindOfClass:[UITabBar class]]) continue;
         CGRect frame = subview.frame;
@@ -126,11 +157,11 @@ static void WriteLog(const char *format, ...) {
         subview.frame = frame;
     }
 
-    WriteLog("TabBar hidden: %d", hide);
+    WriteLog(@"TabBar hidden set to %d", hide);
 }
 
 + (void)applyFullscreen {
-    WriteLog("applyFullscreen");
+    WriteLog(@"applyFullscreen called");
     UIViewController *root = [self rootViewController];
     Class tabClass = NSClassFromString(@"SSTabBarController");
     if (!tabClass || ![root isKindOfClass:tabClass]) return;
@@ -140,9 +171,9 @@ static void WriteLog(const char *format, ...) {
     Class feedClass = NSClassFromString(@"SSVideoSeriesFeedViewController");
     if (feedClass && [selected isKindOfClass:feedClass]) {
         selected.view.frame = [UIScreen mainScreen].bounds;
-        WriteLog("Feed view set to fullscreen");
+        WriteLog(@"Feed view set to fullscreen");
     } else {
-        WriteLog("Selected is not SSVideoSeriesFeedViewController: %s", NSStringFromClass([selected class]).UTF8String);
+        WriteLog(@"Selected is not SSVideoSeriesFeedViewController: %@", NSStringFromClass([selected class]));
     }
 }
 
@@ -159,7 +190,7 @@ static void WriteLog(const char *format, ...) {
 @end
 
 // =============================================
-// Hook UIWindow：三指长按手势
+// Hook UIWindow：三指长按
 // =============================================
 %hook UIWindow
 
@@ -170,7 +201,7 @@ static void WriteLog(const char *format, ...) {
         gesture.numberOfTouchesRequired = 3;
         gesture.minimumPressDuration = 0.8;
         [self addGestureRecognizer:gesture];
-        WriteLog("UIWindow initialized, added 3-finger gesture");
+        WriteLog(@"UIWindow initialized, added 3-finger gesture");
     }
     return self;
 }
@@ -178,19 +209,18 @@ static void WriteLog(const char *format, ...) {
 %new
 - (void)hongguo_handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
-    WriteLog("3-finger long press detected");
+    WriteLog(@"3-finger long press detected");
     [HongGuoHelper showSettingsMenuFromWindow:self];
 }
 
 %end
 
 // =============================================
-// 构造函数：应用保存的设置
+// 构造函数
 // =============================================
 %ctor {
     dispatch_async(dispatch_get_main_queue(), ^{
-        WriteLog("HongGuoFullScreen loaded");
-        // 延迟执行，确保界面已加载
+        WriteLog(@"HongGuoFullScreen loaded");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [HongGuoHelper applyTabBarVisibility];
             [HongGuoHelper applyFullscreen];
