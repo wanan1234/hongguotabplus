@@ -9,43 +9,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git curl unzip dpkg-dev perl xz-utils
+          sudo apt-get install -y build-essential git curl unzip wget dpkg-dev perl
 
-      - name: Clone Theos
+      - name: Install Theos (official installer)
         run: |
-          git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "$HOME/theos/bin" >> $GITHUB_PATH
-
-      - name: Download iOS toolchain (clang)
-        run: |
-          # 使用正确的 Linux 工具链包 (zip)
-          curl -L https://developer.angelxwind.net/Linux/ios-toolchain_clang+llvm+ld64_latest_linux_x86_64.zip -o toolchain.zip
-          mkdir -p $HOME/theos/toolchain/linux/iphone
-          unzip -q toolchain.zip -d $HOME/theos/toolchain/linux/iphone
-          rm toolchain.zip
-
-      - name: Download iOS SDKs
-        run: |
-          curl -L https://github.com/theos/sdks/archive/refs/heads/master.zip -o sdks.zip
-          unzip -q sdks.zip
-          mkdir -p $HOME/theos/sdks
-          mv sdks-master/* $HOME/theos/sdks/
-          rm -rf sdks-master sdks.zip
+          curl -LO https://github.com/theos/installer/raw/master/install.sh
+          chmod +x install.sh
+          # 安装到 /opt/theos，避免权限问题
+          sudo ./install.sh --prefix /opt/theos
+          echo "THEOS=/opt/theos" >> $GITHUB_ENV
+          echo "/opt/theos/bin" >> $GITHUB_PATH
+          # 确保 sdks 目录存在
+          sudo mkdir -p /opt/theos/sdks
+          sudo chown -R runner:runner /opt/theos
 
       - name: Build package
         run: |
           make package
 
-      - name: Upload deb artifact
+      - name: Upload deb
         uses: actions/upload-artifact@v4
         with:
           name: HongGuoFullScreen.deb
