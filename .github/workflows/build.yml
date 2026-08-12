@@ -18,14 +18,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential git curl unzip dpkg-dev perl
 
-      - name: Install Theos
+      - name: Install Theos (with submodules)
         run: |
-          git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
+          git clone --recursive --depth 1 https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
-
-      - name: Fix dm.pl permissions
-        run: chmod +x $HOME/theos/bin/dm.pl
+          # 确保 dm.pl 符号链接有效
+          if [ -L "$HOME/theos/bin/dm.pl" ]; then
+            realpath "$HOME/theos/bin/dm.pl" || {
+              echo "dm.pl link broken, installing manually"
+              curl -L -o "$HOME/theos/bin/dm.pl" https://raw.githubusercontent.com/theos/dm.pl/master/dm.pl
+            }
+          fi
+          chmod +x $HOME/theos/bin/dm.pl
 
       - name: Install iOS SDK
         run: |
