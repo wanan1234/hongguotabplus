@@ -1,9 +1,9 @@
-Package: com.yourname.hongguofullscreen
+Package: com.example.hongguofullscreen
 Name: 红果全屏
 Version: 1.0.0
 Architecture: iphoneos-arm
-Description: 红果短剧全屏及隐藏底栏
-Maintainer: Your Name <your@email.com>
-Author: Your Name
+Description: 隐藏底栏、全屏视频
+Maintainer: you <you@example.com>
+Author: you
 Section: Tweaks
-Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 14.0)
+Depends: mobilesubstrate
