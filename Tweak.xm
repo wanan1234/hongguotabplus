@@ -1,12 +1,11 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar（只保留首页和我的）
-//  修正：点击“我的”跳转到“剧场”的问题
+//  HongGuoFullScreen — 隐藏多余 TabBar 按钮
+//  通过遍历 tabBar 子视图隐藏多余按钮，保留首页和我的
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <stdarg.h>
 
-// ---------- 日志工具 ----------
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -38,113 +37,80 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// ---------- 精简函数 ----------
-static void filterTabBar(id tabController) {
+static void hideExtraTabBarButtons(id tabController) {
     if (!tabController) return;
-    if (![tabController isKindOfClass:[UITabBarController class]]) {
-        WriteLog(@"Not a UITabBarController, skip");
-        return;
-    }
+    if (![tabController isKindOfClass:[UITabBarController class]]) return;
     UITabBarController *tab = (UITabBarController *)tabController;
     
-    NSArray *vcs = tab.viewControllers;
-    if (vcs.count < 5) {
-        WriteLog(@"viewControllers count < 5, skip");
-        return;
-    }
-    WriteLog(@"viewControllers count: %lu", (unsigned long)vcs.count);
+    UITabBar *tabBar = tab.tabBar;
+    if (!tabBar) return;
     
-    // 获取原始 items 标题
-    NSArray *originalItems = tab.tabBar.items;
-    for (NSInteger i = 0; i < originalItems.count; i++) {
-        UITabBarItem *item = originalItems[i];
-        WriteLog(@"  original[%ld] %@", (long)i, item.title ?: @"(无)");
-    }
-    
-    // 1. 过滤 viewControllers（保留索引0和4）
-    NSArray *filteredVCs = @[vcs[0], vcs[4]];
-    [tab setViewControllers:filteredVCs animated:NO];
-    WriteLog(@"viewControllers filtered to %lu items: %@, %@", 
-             (unsigned long)filteredVCs.count,
-             [vcs[0] tabBarItem].title,
-             [vcs[4] tabBarItem].title);
-    
-    // 2. 直接设置 tabBar.items
-    NSArray *items = tab.tabBar.items;
-    if (items.count >= 5) {
-        NSArray *filteredItems = @[items[0], items[4]];
-        [tab.tabBar setItems:filteredItems animated:NO];
-        WriteLog(@"tabBar.items set to %lu items", (unsigned long)filteredItems.count);
-    } else {
-        // 从 viewControllers 获取 tabBarItem
-        UITabBarItem *item0 = [vcs[0] tabBarItem];
-        UITabBarItem *item4 = [vcs[4] tabBarItem];
-        if (item0 && item4) {
-            [tab.tabBar setItems:@[item0, item4] animated:NO];
-            WriteLog(@"tabBar.items set from vcs");
+    // 遍历 tabBar 的子视图，找到 UITabBarButton
+    NSMutableArray *buttons = [NSMutableArray array];
+    for (UIView *subview in tabBar.subviews) {
+        if ([NSStringFromClass([subview class]) isEqualToString:@"UITabBarButton"]) {
+            [buttons addObject:subview];
         }
     }
     
-    // 3. 关键：强制重置 selectedIndex
-    tab.selectedIndex = 0;
+    WriteLog(@"Found %lu UITabBarButton(s)", (unsigned long)buttons.count);
     
-    // 4. 强制刷新
-    [tab.tabBar setNeedsLayout];
-    [tab.tabBar layoutIfNeeded];
-    
-    // 5. 打印设置后的 items
-    NSArray *finalItems = tab.tabBar.items;
-    WriteLog(@"final tabBar.items count: %lu", (unsigned long)finalItems.count);
-    for (NSInteger i = 0; i < finalItems.count; i++) {
-        UITabBarItem *item = finalItems[i];
-        WriteLog(@"  final[%ld] %@", (long)i, item.title ?: @"(无)");
+    // 假设索引 0 是首页，索引 4 是我的，其他隐藏
+    for (NSInteger i = 0; i < buttons.count; i++) {
+        UIView *button = buttons[i];
+        BOOL shouldHide = (i != 0 && i != 4);
+        if (shouldHide) {
+            button.hidden = YES;
+            button.alpha = 0.0;
+            button.userInteractionEnabled = NO;
+            WriteLog(@"Hiding button at index %ld", (long)i);
+        } else {
+            // 保留首页和我的
+            button.hidden = NO;
+            button.alpha = 1.0;
+            button.userInteractionEnabled = YES;
+            WriteLog(@"Keeping button at index %ld", (long)i);
+        }
     }
     
-    WriteLog(@"TabBar filter completed");
+    // 强制刷新布局让剩下的按钮自适应
+    [tabBar setNeedsLayout];
+    [tabBar layoutIfNeeded];
 }
 
-// ---------- 在 viewDidLayoutSubviews 中执行（限流）----------
-static NSTimeInterval lastFilterTime = 0;
-
-// =============================================================
-// Hook SSTabBarController
-// =============================================================
 %hook SSTabBarController
 
 - (void)viewDidLoad {
     %orig;
     WriteLog(@"SSTabBarController viewDidLoad");
-    // 在 viewDidLoad 中立即执行，尽早过滤
-    filterTabBar(self);
+    // 延迟执行确保 tabBar 已创建
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        hideExtraTabBarButtons(self);
+    });
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    WriteLog(@"SSTabBarController viewWillAppear");
-    filterTabBar(self);
+    hideExtraTabBarButtons(self);
 }
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    WriteLog(@"SSTabBarController viewDidAppear");
-    filterTabBar(self);
+    hideExtraTabBarButtons(self);
 }
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    // 布局变化后重新执行（但限流）
+    static NSTimeInterval last = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - lastFilterTime > 0.2) {
-        lastFilterTime = now;
-        filterTabBar(self);
+    if (now - last > 0.2) {
+        last = now;
+        hideExtraTabBarButtons(self);
     }
 }
 
 %end
 
-// =============================================================
-// 构造函数
-// =============================================================
 %ctor {
     WriteLog(@"========================================");
     WriteLog(@"HongGuoFullScreen 加载");
