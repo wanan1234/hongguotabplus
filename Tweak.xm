@@ -38,28 +38,22 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// ---------- 精简函数（使用 id 类型避免编译问题）----------
+// ---------- 精简函数 ----------
 static void filterTabBar(id tabController) {
     if (!tabController) return;
-    
-    // 安全类型检查
     if (![tabController isKindOfClass:[UITabBarController class]]) {
         WriteLog(@"Not a UITabBarController, skip");
         return;
     }
-    
     UITabBarController *tab = (UITabBarController *)tabController;
     
-    // 获取 tabBar.items
     NSArray *items = tab.tabBar.items;
     WriteLog(@"tabBar.items count: %lu", (unsigned long)items.count);
-    
     if (items.count < 5) {
         WriteLog(@"items count < 5, skip");
         return;
     }
     
-    // 打印每个 item 的标题
     for (NSInteger i = 0; i < items.count; i++) {
         UITabBarItem *item = items[i];
         WriteLog(@"  [%ld] %@", (long)i, item.title ?: @"(无标题)");
@@ -67,21 +61,20 @@ static void filterTabBar(id tabController) {
     
     // 只保留索引0和4（首页和我的）
     NSArray *filteredItems = @[items[0], items[4]];
-    WriteLog(@"Filtered to: %@, %@", items[0].title, items[4].title);
+    WriteLog(@"Filtered to: %@, %@", ((UITabBarItem *)items[0]).title, ((UITabBarItem *)items[4]).title);
     
-    // 设置新的 items（不带动画）
+    // 设置新的 items
     [tab.tabBar setItems:filteredItems animated:NO];
     [tab.tabBar setNeedsLayout];
     [tab.tabBar layoutIfNeeded];
     
-    // 也修改 viewControllers 保持一致性
+    // 同步修改 viewControllers
     NSArray *vcs = tab.viewControllers;
     if (vcs.count >= 5) {
         NSArray *filteredVCs = @[vcs[0], vcs[4]];
         [tab setViewControllers:filteredVCs animated:NO];
         WriteLog(@"viewControllers also filtered");
     }
-    
     tab.selectedIndex = 0;
     WriteLog(@"TabBar filter completed");
 }
@@ -99,11 +92,9 @@ static void filterTabBar(id tabController) {
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    // 检查是否被重置
-    if (self.tabBar.items.count > 2) {
-        WriteLog(@"TabBar was reset, re-filtering...");
-        filterTabBar(self);
-    }
+    WriteLog(@"SSTabBarController viewDidAppear");
+    // 再次执行确保生效（比如被重置）
+    filterTabBar(self);
 }
 
 %end
