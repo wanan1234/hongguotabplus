@@ -1,6 +1,6 @@
 // =============================================================
 //  HongGuoFullScreen — 精简 TabBar（只保留首页和我的）
-//  极简版，只操作 tabBar.items，带调试日志
+//  强制设置 tabBar.items，并在 viewDidAppear 中再次确认
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -47,35 +47,58 @@ static void filterTabBar(id tabController) {
     }
     UITabBarController *tab = (UITabBarController *)tabController;
     
-    NSArray *items = tab.tabBar.items;
-    WriteLog(@"tabBar.items count: %lu", (unsigned long)items.count);
-    if (items.count < 5) {
-        WriteLog(@"items count < 5, skip");
+    // 先获取 viewControllers
+    NSArray *vcs = tab.viewControllers;
+    if (vcs.count < 5) {
+        WriteLog(@"viewControllers count < 5, skip");
         return;
     }
+    WriteLog(@"viewControllers count: %lu", (unsigned long)vcs.count);
     
-    for (NSInteger i = 0; i < items.count; i++) {
-        UITabBarItem *item = items[i];
-        WriteLog(@"  [%ld] %@", (long)i, item.title ?: @"(无标题)");
+    // 获取原始 items
+    NSArray *originalItems = tab.tabBar.items;
+    WriteLog(@"original tabBar.items count: %lu", (unsigned long)originalItems.count);
+    for (NSInteger i = 0; i < originalItems.count; i++) {
+        UITabBarItem *item = originalItems[i];
+        WriteLog(@"  original[%ld] %@", (long)i, item.title ?: @"(无)");
     }
     
-    // 只保留索引0和4（首页和我的）
-    NSArray *filteredItems = @[items[0], items[4]];
-    WriteLog(@"Filtered to: %@, %@", ((UITabBarItem *)items[0]).title, ((UITabBarItem *)items[4]).title);
+    // 1. 过滤 viewControllers
+    NSArray *filteredVCs = @[vcs[0], vcs[4]];
+    [tab setViewControllers:filteredVCs animated:NO];
+    WriteLog(@"viewControllers filtered to %lu items", (unsigned long)filteredVCs.count);
     
-    // 设置新的 items
-    [tab.tabBar setItems:filteredItems animated:NO];
+    // 2. 显式创建新的 tabBar.items（使用原始 items 的拷贝，只取需要的）
+    NSArray *items = tab.tabBar.items;
+    if (items.count >= 5) {
+        // 直接使用原始 items 的索引0和4
+        NSArray *filteredItems = @[items[0], items[4]];
+        [tab.tabBar setItems:filteredItems animated:NO];
+        WriteLog(@"tabBar.items set to %lu items", (unsigned long)filteredItems.count);
+    } else {
+        // 如果 items 数量不对，尝试从原始 vcs 中获取 tabBarItem
+        UITabBarItem *item0 = [vcs[0] tabBarItem];
+        UITabBarItem *item4 = [vcs[4] tabBarItem];
+        if (item0 && item4) {
+            NSArray *filteredItems = @[item0, item4];
+            [tab.tabBar setItems:filteredItems animated:NO];
+            WriteLog(@"tabBar.items set from vcs");
+        }
+    }
+    
+    // 3. 强制刷新布局
     [tab.tabBar setNeedsLayout];
     [tab.tabBar layoutIfNeeded];
-    
-    // 同步修改 viewControllers
-    NSArray *vcs = tab.viewControllers;
-    if (vcs.count >= 5) {
-        NSArray *filteredVCs = @[vcs[0], vcs[4]];
-        [tab setViewControllers:filteredVCs animated:NO];
-        WriteLog(@"viewControllers also filtered");
-    }
     tab.selectedIndex = 0;
+    
+    // 4. 打印设置后的 items
+    NSArray *finalItems = tab.tabBar.items;
+    WriteLog(@"final tabBar.items count: %lu", (unsigned long)finalItems.count);
+    for (NSInteger i = 0; i < finalItems.count; i++) {
+        UITabBarItem *item = finalItems[i];
+        WriteLog(@"  final[%ld] %@", (long)i, item.title ?: @"(无)");
+    }
+    
     WriteLog(@"TabBar filter completed");
 }
 
@@ -93,8 +116,19 @@ static void filterTabBar(id tabController) {
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     WriteLog(@"SSTabBarController viewDidAppear");
-    // 再次执行确保生效（比如被重置）
+    // 再次执行，确保生效
     filterTabBar(self);
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    // 布局变化后也可能重置，再次执行（但限制频率）
+    static NSTimeInterval lastFilterTime = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - lastFilterTime > 0.2) {
+        lastFilterTime = now;
+        filterTabBar(self);
+    }
 }
 
 %end
