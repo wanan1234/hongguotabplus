@@ -1,32 +1,28 @@
 // =============================================================
 //  HongGuoFullScreen — 精简 TabBar（只保留首页和我的）
-//  基于成功过滤版本，修正跳转问题
+//  拦截 setViewControllers: 和 setItems:，防止系统重置
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <stdarg.h>
 
-// ---------- 日志工具 ----------
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-
+    // 写入 Documents/HongGuo.log
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *documentsDirectory = [paths firstObject];
     NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
-
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:documentsDirectory]) {
         [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
     }
-
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
-
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (!fh) {
         [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -38,70 +34,57 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// ---------- 精简函数 ----------
+static BOOL gFiltered = NO;
+
+// ---------- 过滤函数（只执行一次）----------
 static void filterTabBar(id tabController) {
     if (!tabController) return;
-    if (![tabController isKindOfClass:[UITabBarController class]]) {
-        WriteLog(@"Not a UITabBarController, skip");
+    if (![tabController isKindOfClass:[UITabBarController class]]) return;
+    if (gFiltered) {
+        WriteLog(@"Already filtered, skip");
         return;
     }
     UITabBarController *tab = (UITabBarController *)tabController;
-    
     NSArray *vcs = tab.viewControllers;
     if (vcs.count < 5) {
         WriteLog(@"viewControllers count < 5, skip");
         return;
     }
-    WriteLog(@"viewControllers count: %lu", (unsigned long)vcs.count);
-    
-    // 获取原始 items
-    NSArray *originalItems = tab.tabBar.items;
-    for (NSInteger i = 0; i < originalItems.count; i++) {
-        UITabBarItem *item = originalItems[i];
-        WriteLog(@"  original[%ld] %@", (long)i, item.title ?: @"(无)");
+    WriteLog(@"Filtering... original viewControllers count: %lu", (unsigned long)vcs.count);
+    // 打印原标题
+    for (NSInteger i = 0; i < vcs.count; i++) {
+        WriteLog(@"  [%ld] %@", (long)i, [vcs[i] tabBarItem].title ?: @"(无)");
     }
     
-    // 1. 创建新的控制器数组
-    UIViewController *vc0 = vcs[0];  // 首页
-    UIViewController *vc4 = vcs[4];  // 我的
-    
-    // 重新创建 tabBarItem，确保关联正确
-    // 从原始 items 复制标题和图片
-    UITabBarItem *item0 = originalItems[0];
-    UITabBarItem *item4 = originalItems[4];
-    
-    // 为控制器设置新的 tabBarItem（确保完全独立）
-    vc0.tabBarItem = [[UITabBarItem alloc] initWithTitle:item0.title image:item0.image tag:0];
-    vc4.tabBarItem = [[UITabBarItem alloc] initWithTitle:item4.title image:item4.image tag:1];
-    
-    // 2. 设置 viewControllers
-    NSArray *filteredVCs = @[vc0, vc4];
+    // 设置新的 viewControllers（只保留索引0和4）
+    NSArray *filteredVCs = @[vcs[0], vcs[4]];
     [tab setViewControllers:filteredVCs animated:NO];
-    WriteLog(@"viewControllers filtered to %lu items: %@, %@", 
-             (unsigned long)filteredVCs.count,
-             vc0.tabBarItem.title,
-             vc4.tabBarItem.title);
+    WriteLog(@"setViewControllers to %lu items", (unsigned long)filteredVCs.count);
     
-    // 3. 直接设置 tabBar.items
-    [tab.tabBar setItems:@[vc0.tabBarItem, vc4.tabBarItem] animated:NO];
-    WriteLog(@"tabBar.items set");
-    
-    // 4. 强制重置 selectedIndex
-    tab.selectedIndex = 0;
-    
-    // 5. 强制刷新布局
+    // 直接设置 tabBar.items
+    NSArray *items = tab.tabBar.items;
+    if (items.count >= 5) {
+        [tab.tabBar setItems:@[items[0], items[4]] animated:NO];
+    } else {
+        // 从过滤后的 viewControllers 获取
+        UITabBarItem *item0 = [filteredVCs[0] tabBarItem];
+        UITabBarItem *item4 = [filteredVCs[1] tabBarItem];
+        if (item0 && item4) {
+            [tab.tabBar setItems:@[item0, item4] animated:NO];
+        }
+    }
     [tab.tabBar setNeedsLayout];
     [tab.tabBar layoutIfNeeded];
+    tab.selectedIndex = 0;
     
-    // 6. 打印设置后的 items
+    // 打印最终 items
     NSArray *finalItems = tab.tabBar.items;
     WriteLog(@"final tabBar.items count: %lu", (unsigned long)finalItems.count);
     for (NSInteger i = 0; i < finalItems.count; i++) {
-        UITabBarItem *item = finalItems[i];
-        WriteLog(@"  final[%ld] %@", (long)i, item.title ?: @"(无)");
+        WriteLog(@"  final[%ld] %@", (long)i, [(UITabBarItem *)finalItems[i] title] ?: @"(无)");
     }
-    
-    WriteLog(@"TabBar filter completed");
+    gFiltered = YES;
+    WriteLog(@"Filter completed once");
 }
 
 // =============================================================
@@ -109,16 +92,59 @@ static void filterTabBar(id tabController) {
 // =============================================================
 %hook SSTabBarController
 
-- (void)viewWillAppear:(BOOL)animated {
+- (void)viewDidLoad {
     %orig;
-    WriteLog(@"SSTabBarController viewWillAppear");
+    WriteLog(@"SSTabBarController viewDidLoad");
     filterTabBar(self);
 }
 
-- (void)viewDidAppear:(BOOL)animated {
+- (void)viewWillAppear:(BOOL)animated {
     %orig;
-    WriteLog(@"SSTabBarController viewDidAppear");
-    filterTabBar(self);
+    WriteLog(@"SSTabBarController viewWillAppear");
+    // 如果被重置，重新过滤（但只过滤一次，如果已经过滤过就不再重复）
+    if (!gFiltered) {
+        filterTabBar(self);
+    }
+}
+
+// 拦截 setViewControllers，防止系统重置
+- (void)setViewControllers:(NSArray *)viewControllers animated:(BOOL)animated {
+    WriteLog(@"setViewControllers: called with %lu items", (unsigned long)viewControllers.count);
+    // 如果已经过滤过，并且传入的 viewControllers 数量不是 2，则阻止
+    if (gFiltered && viewControllers.count != 2) {
+        WriteLog(@"Blocking setViewControllers with %lu items (already filtered)", (unsigned long)viewControllers.count);
+        // 不调用原方法，但我们需要保留当前过滤后的 viewControllers
+        // 直接返回，不执行 %orig
+        return;
+    }
+    %orig;
+}
+
+- (void)setViewControllers:(NSArray *)viewControllers {
+    WriteLog(@"setViewControllers: called with %lu items (no animated)", (unsigned long)viewControllers.count);
+    if (gFiltered && viewControllers.count != 2) {
+        WriteLog(@"Blocking setViewControllers with %lu items", (unsigned long)viewControllers.count);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+// =============================================================
+// Hook UITabBar 的 setItems，防止系统重置
+// =============================================================
+%hook UITabBar
+
+- (void)setItems:(NSArray *)items animated:(BOOL)animated {
+    WriteLog(@"UITabBar setItems: called with %lu items", (unsigned long)items.count);
+    // 如果已经过滤过，并且传入的 items 数量不是 2，则阻止
+    static BOOL gBlocking = NO;
+    if (gFiltered && items.count != 2 && !gBlocking) {
+        WriteLog(@"Blocking setItems with %lu items", (unsigned long)items.count);
+        return;
+    }
+    %orig;
 }
 
 %end
