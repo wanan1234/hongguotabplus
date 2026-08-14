@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar（基于诊断版本，移除日志）
-//  只过滤 SSTabBar 的 items，保留 viewControllers 完整
+//  HongGuoFullScreen — 精简 TabBar（最终稳定版）
+//  只过滤 SSTabBar 的 items，不干扰 viewControllers
 //  包含双指双击弹窗开关 + 重启功能
 // =============================================================
 #import <UIKit/UIKit.h>
@@ -16,8 +16,7 @@ static BOOL HGIsEnabled() {
 %hook SSTabBar
 
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    // 完全保留诊断版本的逻辑，只移除 WriteLog 调用
-    if (items.count > 2) {
+    if (HGIsEnabled() && items.count > 2) {
         // 只保留首页（索引0）和我的（索引4）
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
@@ -96,10 +95,9 @@ static void showSettingsMenu(UIWindow *window) {
 // 构造函数
 // =============================================================
 %ctor {
-    // 默认开启
     if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoFullScreenEnabled"]) {
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoFullScreenEnabled"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    NSLog(@"[HongGuo] TabBar精简插件加载成功");
+    NSLog(@"[HongGuo] TabBar精简插件加载成功，开关状态：%@", HGIsEnabled() ? @"开启" : @"关闭");
 }
