@@ -1,11 +1,9 @@
 // =============================================================
 //  HongGuoFullScreen — 精简 TabBar（只保留首页和我的）
-//  直接操作 tabBar.items，强制刷新
-//  带完整调试日志
+//  极简版，只操作 tabBar.items，带调试日志
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
-#import <objc/runtime.h>
 #import <stdarg.h>
 
 // ---------- 日志工具 ----------
@@ -40,50 +38,51 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// ---------- 精简 TabBar ----------
-static void filterTabBarController(UITabBarController *tabController) {
+// ---------- 精简函数（使用 id 类型避免编译问题）----------
+static void filterTabBar(id tabController) {
     if (!tabController) return;
     
-    WriteLog(@"filterTabBarController called");
-    
-    // 获取 viewControllers
-    NSArray *vcs = tabController.viewControllers;
-    WriteLog(@"viewControllers count: %lu", (unsigned long)vcs.count);
-    
-    if (vcs.count < 5) {
-        WriteLog(@"viewControllers count < 5, skip filtering");
+    // 安全类型检查
+    if (![tabController isKindOfClass:[UITabBarController class]]) {
+        WriteLog(@"Not a UITabBarController, skip");
         return;
     }
     
-    // 打印所有 viewControllers 的标题
-    for (NSInteger i = 0; i < vcs.count; i++) {
-        UIViewController *vc = vcs[i];
-        NSString *title = vc.tabBarItem.title ?: @"(无标题)";
-        WriteLog(@"  [%ld] %@ - %@", (long)i, title, NSStringFromClass([vc class]));
-    }
+    UITabBarController *tab = (UITabBarController *)tabController;
     
-    // 1. 修改 viewControllers（保留索引0和4）
-    NSMutableArray *filteredVCs = [NSMutableArray array];
-    [filteredVCs addObject:vcs[0]];  // 首页
-    [filteredVCs addObject:vcs[4]];  // 我的
-    [tabController setViewControllers:filteredVCs animated:NO];
-    WriteLog(@"viewControllers filtered to %lu items", (unsigned long)filteredVCs.count);
-    
-    // 2. 直接修改 tabBar.items（关键！）
-    NSArray *items = tabController.tabBar.items;
+    // 获取 tabBar.items
+    NSArray *items = tab.tabBar.items;
     WriteLog(@"tabBar.items count: %lu", (unsigned long)items.count);
     
-    if (items.count >= 5) {
-        NSArray *filteredItems = @[items[0], items[4]];
-        [tabController.tabBar setItems:filteredItems animated:NO];
-        WriteLog(@"tabBar.items filtered to %lu items", (unsigned long)filteredItems.count);
+    if (items.count < 5) {
+        WriteLog(@"items count < 5, skip");
+        return;
     }
     
-    // 3. 强制刷新布局
-    [tabController.tabBar setNeedsLayout];
-    [tabController.tabBar layoutIfNeeded];
-    tabController.selectedIndex = 0;
+    // 打印每个 item 的标题
+    for (NSInteger i = 0; i < items.count; i++) {
+        UITabBarItem *item = items[i];
+        WriteLog(@"  [%ld] %@", (long)i, item.title ?: @"(无标题)");
+    }
     
+    // 只保留索引0和4（首页和我的）
+    NSArray *filteredItems = @[items[0], items[4]];
+    WriteLog(@"Filtered to: %@, %@", items[0].title, items[4].title);
+    
+    // 设置新的 items（不带动画）
+    [tab.tabBar setItems:filteredItems animated:NO];
+    [tab.tabBar setNeedsLayout];
+    [tab.tabBar layoutIfNeeded];
+    
+    // 也修改 viewControllers 保持一致性
+    NSArray *vcs = tab.viewControllers;
+    if (vcs.count >= 5) {
+        NSArray *filteredVCs = @[vcs[0], vcs[4]];
+        [tab setViewControllers:filteredVCs animated:NO];
+        WriteLog(@"viewControllers also filtered");
+    }
+    
+    tab.selectedIndex = 0;
     WriteLog(@"TabBar filter completed");
 }
 
@@ -94,45 +93,16 @@ static void filterTabBarController(UITabBarController *tabController) {
 
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    WriteLog(@"SSTabBarController viewWillAppear, viewControllers count: %lu", (unsigned long)self.viewControllers.count);
-    filterTabBarController(self);
+    WriteLog(@"SSTabBarController viewWillAppear");
+    filterTabBar(self);
 }
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    WriteLog(@"SSTabBarController viewDidAppear, viewControllers count: %lu", (unsigned long)self.viewControllers.count);
-    // 检查是否被重置，如果是则重新过滤
-    if (self.viewControllers.count > 2) {
+    // 检查是否被重置
+    if (self.tabBar.items.count > 2) {
         WriteLog(@"TabBar was reset, re-filtering...");
-        filterTabBarController(self);
-    }
-}
-
-%end
-
-// =============================================================
-// Hook SSRootViewController（延迟执行，确保加载完成）
-// =============================================================
-%hook SSRootViewController
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    WriteLog(@"SSRootViewController viewDidAppear");
-    
-    // 查找 SSTabBarController
-    UITabBarController *tabController = nil;
-    for (UIViewController *child in self.childViewControllers) {
-        if ([child isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
-            tabController = (UITabBarController *)child;
-            WriteLog(@"Found SSTabBarController in children");
-            break;
-        }
-    }
-    
-    if (tabController) {
-        filterTabBarController(tabController);
-    } else {
-        WriteLog(@"SSTabBarController not found in children");
+        filterTabBar(self);
     }
 }
 
@@ -145,6 +115,5 @@ static void filterTabBarController(UITabBarController *tabController) {
     WriteLog(@"========================================");
     WriteLog(@"HongGuoFullScreen 加载");
     WriteLog(@"Bundle ID: %@", [[NSBundle mainBundle] bundleIdentifier]);
-    WriteLog(@"精简Tab: 开启");
     WriteLog(@"========================================");
 }
