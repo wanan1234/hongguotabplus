@@ -1,3 +1,7 @@
+// =============================================================
+//  HongGuoFullScreen — 精简 TabBar（拦截重定向）
+//  只保留首页和我的，拦截 setSelectedIndex 修正跳转错乱
+// =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <stdarg.h>
@@ -33,43 +37,66 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// 这里直接用 `id` 和 KVC 获取 viewControllers，避免编译问题
-static void fixTabBar(id tabController) {
-    if (!tabController) return;
-    if (![tabController isKindOfClass:[UITabBarController class]]) return;
-    UITabBarController *tab = (UITabBarController *)tabController;
+static BOOL gFiltered = NO;
 
-    // 确保已经过滤过
-    NSArray *vcs = tab.viewControllers;
-    if (vcs.count != 2) {
-        WriteLog(@"Expected 2 viewControllers, but got %lu, skip", (unsigned long)vcs.count);
+// 查找“我的”控制器索引
+static NSInteger indexOfMyVC(NSArray *vcs) {
+    for (NSInteger i = 0; i < vcs.count; i++) {
+        UIViewController *vc = vcs[i];
+        NSString *title = vc.tabBarItem.title;
+        if ([title isEqualToString:@"我的"]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// 过滤函数
+static void filterTabBar(UITabBarController *tab) {
+    if (!tab) return;
+    if (gFiltered) {
+        WriteLog(@"Already filtered, skip");
         return;
     }
-
-    // 检查 title
-    NSString *title0 = [vcs[0] tabBarItem].title;
-    NSString *title1 = [vcs[1] tabBarItem].title;
-    WriteLog(@"Current titles: [0]=%@, [1]=%@", title0, title1);
-
-    // 确保索引 1 是“我的”，如果不是，说明过滤失败了，重新过滤
-    if (![title1 isEqualToString:@"我的"]) {
-        WriteLog(@"Index 1 is not '我的', re-filtering...");
-        // 根据标题重新排序
-        NSMutableArray *sorted = [NSMutableArray array];
-        for (UIViewController *vc in vcs) {
-            if ([vc.tabBarItem.title isEqualToString:@"首页"]) {
-                [sorted insertObject:vc atIndex:0];
-            } else if ([vc.tabBarItem.title isEqualToString:@"我的"]) {
-                [sorted addObject:vc];
-            }
-        }
-        if (sorted.count == 2) {
-            [tab setViewControllers:sorted animated:NO];
-            WriteLog(@"Re-filtered to: %@, %@", [sorted[0] tabBarItem].title, [sorted[1] tabBarItem].title);
-            tab.selectedIndex = 0;
-            [tab.tabBar setItems:@[[sorted[0] tabBarItem], [sorted[1] tabBarItem]] animated:NO];
-        }
+    
+    NSArray *vcs = tab.viewControllers;
+    if (vcs.count < 5) {
+        WriteLog(@"viewControllers count < 5, skip");
+        return;
     }
+    
+    WriteLog(@"Filtering... original viewControllers count: %lu", (unsigned long)vcs.count);
+    for (NSInteger i = 0; i < vcs.count; i++) {
+        WriteLog(@"  [%ld] %@", (long)i, [vcs[i] tabBarItem].title ?: @"(无)");
+    }
+    
+    // 1. 过滤 viewControllers（只保留索引0和4）
+    NSArray *filteredVCs = @[vcs[0], vcs[4]];
+    [tab setViewControllers:filteredVCs animated:NO];
+    WriteLog(@"viewControllers filtered to %lu items", (unsigned long)filteredVCs.count);
+    
+    // 2. 过滤 tabBar.items
+    NSArray *items = tab.tabBar.items;
+    if (items.count >= 5) {
+        NSArray *filteredItems = @[items[0], items[4]];
+        [tab.tabBar setItems:filteredItems animated:NO];
+        WriteLog(@"tabBar.items filtered");
+    }
+    
+    [tab.tabBar setNeedsLayout];
+    [tab.tabBar layoutIfNeeded];
+    
+    // 只在首次设置 selectedIndex
+    tab.selectedIndex = 0;
+    
+    NSArray *finalItems = tab.tabBar.items;
+    WriteLog(@"final tabBar.items count: %lu", (unsigned long)finalItems.count);
+    for (NSInteger i = 0; i < finalItems.count; i++) {
+        WriteLog(@"  final[%ld] %@", (long)i, [(UITabBarItem *)finalItems[i] title] ?: @"(无)");
+    }
+    
+    gFiltered = YES;
+    WriteLog(@"Filter completed once");
 }
 
 // =============================================================
@@ -80,69 +107,40 @@ static void fixTabBar(id tabController) {
 - (void)viewDidLoad {
     %orig;
     WriteLog(@"SSTabBarController viewDidLoad");
-    // 先过滤
-    NSArray *vcs = self.viewControllers;
-    if (vcs.count >= 5) {
-        NSArray *filtered = @[vcs[0], vcs[4]];
-        [self setViewControllers:filtered animated:NO];
-        [self.tabBar setItems:@[filtered[0].tabBarItem, filtered[1].tabBarItem] animated:NO];
-        self.selectedIndex = 0;
-        WriteLog(@"Filtered to: %@, %@", filtered[0].tabBarItem.title, filtered[1].tabBarItem.title);
-    }
+    // 强制转换为 UITabBarController
+    filterTabBar((UITabBarController *)self);
 }
 
-// =============================================================
-// 拦截 setSelectedIndex：直接修正
-// =============================================================
+// 拦截 setSelectedIndex
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
-    WriteLog(@"setSelectedIndex called with: %ld", (long)selectedIndex);
+    WriteLog(@"setSelectedIndex called: %ld", (long)selectedIndex);
     
-    // 如果已经过滤，检查目标
-    NSArray *vcs = self.viewControllers;
-    if (vcs.count == 2) {
-        // 检查是否有无效索引
-        if (selectedIndex >= vcs.count) {
-            selectedIndex = 0;
-            WriteLog(@"Index out of bounds, set to 0");
-        } else {
-            UIViewController *target = vcs[selectedIndex];
-            NSString *title = target.tabBarItem.title;
-            WriteLog(@"Target title: %@", title);
-            // 如果目标是“剧场”“商城”“福利”，则重定向到“我的”
-            if ([title isEqualToString:@"剧场"] || [title isEqualToString:@"商城"] || [title isEqualToString:@"福利"]) {
-                // 查找“我的”索引
-                NSInteger myIndex = -1;
-                for (NSInteger i = 0; i < vcs.count; i++) {
-                    if ([vcs[i].tabBarItem.title isEqualToString:@"我的"]) {
-                        myIndex = i;
-                        break;
-                    }
-                }
-                if (myIndex != -1) {
-                    selectedIndex = myIndex;
-                    WriteLog(@"Redirect to '我的' index: %ld", (long)myIndex);
-                } else {
-                    selectedIndex = 0;
-                    WriteLog(@"Cannot find '我的', set to 0");
-                }
+    UITabBarController *tab = (UITabBarController *)self;
+    NSArray *vcs = tab.viewControllers;
+    
+    // 如果已经过滤，且选中索引在范围内
+    if (gFiltered && selectedIndex < vcs.count) {
+        UIViewController *targetVC = vcs[selectedIndex];
+        NSString *title = targetVC.tabBarItem.title;
+        WriteLog(@"Target VC title: %@", title ?: @"(无)");
+        
+        // 如果选中的是“剧场”（索引1），重定向到“我的”
+        if ([title isEqualToString:@"剧场"]) {
+            NSInteger myIndex = indexOfMyVC(vcs);
+            if (myIndex != -1) {
+                WriteLog(@"Redirect '剧场' to '我的' (index %ld)", (long)myIndex);
+                %orig(myIndex);
+                return;
+            } else {
+                WriteLog(@"My VC not found, redirect to 0");
+                %orig(0);
+                return;
             }
-        }
-    } else {
-        // 如果还没过滤，尝试过滤
-        if (vcs.count >= 5) {
-            NSArray *filtered = @[vcs[0], vcs[4]];
-            [self setViewControllers:filtered animated:NO];
-            [self.tabBar setItems:@[filtered[0].tabBarItem, filtered[1].tabBarItem] animated:NO];
-            self.selectedIndex = 0;
-            WriteLog(@"Filtered in setSelectedIndex");
-            // 然后递归调用一次，但用新索引
-            [self setSelectedIndex:0];
-            return;
         }
     }
     
     %orig(selectedIndex);
-    WriteLog(@"setSelectedIndex completed: %ld", (long)selectedIndex);
+    WriteLog(@"setSelectedIndex completed to: %ld", (long)selectedIndex);
 }
 
 %end
@@ -152,7 +150,7 @@ static void fixTabBar(id tabController) {
 // =============================================================
 %ctor {
     WriteLog(@"========================================");
-    WriteLog(@"HongGuoFullScreen 加载");
+    WriteLog(@"HongGuoFullScreen 加载（最终版）");
     WriteLog(@"Bundle ID: %@", [[NSBundle mainBundle] bundleIdentifier]);
     WriteLog(@"========================================");
 }
