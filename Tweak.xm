@@ -1,37 +1,33 @@
 // =============================================================
-//  HongGuoFullScreen — 精简红果Tab栏（只保留首页+我的）
-//  双指双击弹出菜单，自适应布局
-//  完整诊断日志
+//  HongGuoFullScreen — 精简底栏（只留首页和我的）
+//  双指双击弹出菜单 + 详细日志
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <objc/runtime.h>
+#import <stdarg.h>
 
-// 声明 SSTabBarController 为 UITabBarController 的子类，让编译器识别其属性和方法
-@interface SSTabBarController : UITabBarController
-@end
-
-// 日志工具
+// ---------- 日志工具 ----------
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    
+
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *documentsDirectory = [paths firstObject];
     NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
-    
+
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:documentsDirectory]) {
         [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
     }
-    
+
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     NSString *timestamp = [df stringFromDate:[NSDate date]];
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
-    
+
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (!fh) {
         [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -43,28 +39,102 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// 核心：过滤 TabBar 控制器，只保留首页(索引0)和我的(索引4)
+// ---------- 开关 ----------
+static BOOL isEnabled() {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoSimplifyTabEnabled"];
+}
+
+// ---------- 核心过滤函数 ----------
 static void filterTabBarController(UITabBarController *tabController) {
-    if (!tabController) return;
-    WriteLog(@"filterTabBarController 被调用，当前 viewControllers 数量: %lu", (unsigned long)tabController.viewControllers.count);
-    
-    NSArray *originalVCs = tabController.viewControllers;
-    if (originalVCs.count >= 5) {
-        NSMutableArray *filtered = [NSMutableArray array];
-        [filtered addObject:originalVCs[0]]; // 首页
-        [filtered addObject:originalVCs[4]]; // 我的
-        
-        WriteLog(@"过滤前: %@", [originalVCs valueForKey:@"title"]);
-        WriteLog(@"过滤后: %@", [filtered valueForKey:@"title"]);
-        
-        [tabController setViewControllers:filtered animated:NO];
-        [tabController.tabBar setNeedsLayout];
-        [tabController.tabBar layoutIfNeeded];
-        tabController.selectedIndex = 0;
-        WriteLog(@"TabBar 已精简，选中索引: %ld", (long)tabController.selectedIndex);
-    } else {
-        WriteLog(@"viewControllers 数量不足5个，当前数量: %lu", (unsigned long)originalVCs.count);
+    if (!tabController) {
+        WriteLog(@"filterTabBarController: tabController is nil");
+        return;
     }
+    if (!isEnabled()) {
+        WriteLog(@"filterTabBarController: disabled, skip");
+        return;
+    }
+
+    NSArray *originalVCs = tabController.viewControllers;
+    if (!originalVCs || originalVCs.count == 0) {
+        WriteLog(@"filterTabBarController: viewControllers empty");
+        return;
+    }
+
+    WriteLog(@"filterTabBarController: original viewControllers count = %lu", (unsigned long)originalVCs.count);
+    for (int i = 0; i < originalVCs.count; i++) {
+        UIViewController *vc = originalVCs[i];
+        WriteLog(@"  [%d] %@", i, NSStringFromClass([vc class]));
+    }
+
+    // 只保留索引0和索引4（如果存在）
+    if (originalVCs.count < 5) {
+        WriteLog(@"filterTabBarController: less than 5 items, skip");
+        return;
+    }
+
+    NSMutableArray *filtered = [NSMutableArray array];
+    [filtered addObject:originalVCs[0]];
+    [filtered addObject:originalVCs[4]];
+    WriteLog(@"filterTabBarController: filtered count = %lu", (unsigned long)filtered.count);
+
+    // 应用新的控制器数组
+    [tabController setViewControllers:filtered animated:NO];
+    [tabController.tabBar setNeedsLayout];
+    [tabController.tabBar layoutIfNeeded];
+    tabController.selectedIndex = 0;
+    WriteLog(@"filterTabBarController: applied successfully");
+}
+
+// ---------- 查找并过滤 TabBarController ----------
+static void findAndFilterTabBar(UIViewController *root) {
+    if (!root) {
+        WriteLog(@"findAndFilterTabBar: root is nil");
+        return;
+    }
+    WriteLog(@"findAndFilterTabBar: starting from root class %@", NSStringFromClass([root class]));
+
+    // 如果 root 本身就是 SSTabBarController
+    Class tabClass = NSClassFromString(@"SSTabBarController");
+    if (tabClass && [root isKindOfClass:tabClass]) {
+        WriteLog(@"findAndFilterTabBar: root is SSTabBarController");
+        filterTabBarController((UITabBarController *)root);
+        return;
+    }
+
+    // 遍历子控制器
+    for (UIViewController *child in root.childViewControllers) {
+        if (tabClass && [child isKindOfClass:tabClass]) {
+            WriteLog(@"findAndFilterTabBar: found SSTabBarController in child");
+            filterTabBarController((UITabBarController *)child);
+            return;
+        }
+    }
+
+    // 如果 root 是 UINavigationController，检查栈
+    if ([root isKindOfClass:[UINavigationController class]]) {
+        UINavigationController *nav = (UINavigationController *)root;
+        for (UIViewController *vc in nav.viewControllers) {
+            if (tabClass && [vc isKindOfClass:tabClass]) {
+                WriteLog(@"findAndFilterTabBar: found SSTabBarController in nav stack");
+                filterTabBarController((UITabBarController *)vc);
+                return;
+            }
+        }
+    }
+
+    WriteLog(@"findAndFilterTabBar: SSTabBarController NOT found");
+}
+
+// ---------- 应用设置 ----------
+static void applySettings() {
+    WriteLog(@"applySettings called, enabled=%d", isEnabled());
+    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    if (!keyWindow) {
+        WriteLog(@"applySettings: no keyWindow");
+        return;
+    }
+    findAndFilterTabBar(keyWindow.rootViewController);
 }
 
 // =============================================================
@@ -83,11 +153,21 @@ static void showToast(NSString *msg, UIWindow *window) {
 static void showSettingsMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果Tab控制"
-                                                                   message:@"日志路径: Documents/HongGuo.log\n点击查看日志或切换开关"
+
+    BOOL enabled = isEnabled();
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简底栏"
+                                                                   message:[NSString stringWithFormat:@"当前状态：%@\n日志路径: Documents/HongGuo.log", enabled ? @"已开启" : @"已关闭"]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-    
+
+    [alert addAction:[UIAlertAction actionWithTitle:enabled ? @"关闭精简" : @"开启精简" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        BOOL newState = !enabled;
+        [[NSUserDefaults standardUserDefaults] setBool:newState forKey:@"HongGuoSimplifyTabEnabled"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        // 立即应用
+        applySettings();
+        showToast(newState ? @"精简已开启" : @"精简已关闭", window);
+    }]];
+
     [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *documentsDirectory = [paths firstObject];
@@ -100,7 +180,7 @@ static void showSettingsMenu(UIWindow *window) {
         while (top.presentedViewController) top = top.presentedViewController;
         [top presentViewController:logAlert animated:YES completion:nil];
     }]];
-    
+
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
@@ -119,8 +199,9 @@ static void showSettingsMenu(UIWindow *window) {
         UITapGestureRecognizer *gesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hg_handleDoubleTap:)];
         gesture.numberOfTouchesRequired = 2;
         gesture.numberOfTapsRequired = 2;
+        gesture.cancelsTouchesInView = NO;
         [self addGestureRecognizer:gesture];
-        WriteLog(@"双指双击手势已添加到窗口");
+        WriteLog(@"双指双击手势已添加");
     }
     return self;
 }
@@ -130,71 +211,71 @@ static void showSettingsMenu(UIWindow *window) {
         if (@available(iOS 10.0, *)) {
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
         }
-        WriteLog(@"用户触发双指双击，弹出菜单");
         showSettingsMenu(self);
     }
 }
 %end
 
 // =============================================================
-// Hook SSTabBarController
+// Hook SSTabBarController：在出现时应用
 // =============================================================
 %hook SSTabBarController
-
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
     WriteLog(@"SSTabBarController viewWillAppear");
-    filterTabBarController(self);
+    if (isEnabled()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            filterTabBarController(self);
+        });
+    }
 }
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     WriteLog(@"SSTabBarController viewDidAppear");
-    filterTabBarController(self);
+    if (isEnabled()) {
+        // 再次确认，防止被重置
+        if (self.viewControllers.count > 2) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                filterTabBarController(self);
+            });
+        }
+    }
 }
+%end
 
-- (void)viewDidLayoutSubviews {
+// =============================================================
+// Hook SSRootViewController：在根控制器加载时应用
+// =============================================================
+%hook SSRootViewController
+- (void)viewDidLoad {
     %orig;
-    WriteLog(@"SSTabBarController viewDidLayoutSubviews");
-    filterTabBarController(self);
+    WriteLog(@"SSRootViewController viewDidLoad");
+    if (isEnabled()) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            applySettings();
+        });
+    }
 }
-
-- (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers animated:(BOOL)animated {
-    WriteLog(@"SSTabBarController setViewControllers 被调用，数量: %lu", (unsigned long)viewControllers.count);
-    %orig;
-    // 再次过滤以确保
-    filterTabBarController(self);
-}
-
 %end
 
 // =============================================================
 // 构造函数
 // =============================================================
 %ctor {
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoSimplifyTabEnabled"]) {
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoSimplifyTabEnabled"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
     WriteLog(@"========================================");
-    WriteLog(@"HongGuoFullScreen 加载");
+    WriteLog(@"HongGuoFullScreen 精简底栏插件加载");
     WriteLog(@"Bundle ID: %@", [[NSBundle mainBundle] bundleIdentifier]);
+    WriteLog(@"开关状态: %@", isEnabled() ? @"开启" : @"关闭");
     WriteLog(@"========================================");
-    // 延迟执行，确保窗口已创建
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-        if (keyWindow) {
-            // 查找 SSTabBarController
-            UIViewController *root = keyWindow.rootViewController;
-            if ([root isKindOfClass:[UITabBarController class]]) {
-                WriteLog(@"根控制器是 UITabBarController，直接过滤");
-                filterTabBarController((UITabBarController *)root);
-            } else {
-                // 遍历子控制器
-                for (UIViewController *child in root.childViewControllers) {
-                    if ([child isKindOfClass:[UITabBarController class]]) {
-                        WriteLog(@"找到子控制器 UITabBarController");
-                        filterTabBarController((UITabBarController *)child);
-                        break;
-                    }
-                }
-            }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (isEnabled()) {
+            applySettings();
         }
     });
 }
