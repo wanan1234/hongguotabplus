@@ -1,6 +1,5 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（前置设置）
-//  不交换顺序，在 viewWillAppear 中提前设置 selectedIndex
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（高亮同步）
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -24,7 +23,6 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// 1. 过滤 SSTabBar 的 items
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
@@ -36,8 +34,8 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 %end
 
-// 2. 拦截 setSelectedIndex，修正跳转错乱
 %hook SSTabBarController
+
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -60,21 +58,23 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// 3. 在 viewWillAppear 中前置设置 selectedIndex
 - (void)viewWillAppear:(BOOL)animated {
-    // 先设置默认页面（在 %orig 之前）
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
         NSArray *vcs = tab.viewControllers;
         NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
+        if (myIndex != -1) {
+            // 先设置 selectedIndex
             tab.selectedIndex = myIndex;
+            // 强制同步高亮
+            [tab.tabBar setSelectedItem:tab.tabBar.items[1]]; // 索引1对应“我的”（因为过滤后items为[首页, 我的]）
+            [tab.tabBar setNeedsLayout];
+            [tab.tabBar layoutIfNeeded];
         }
     }
     %orig;
 }
 
-// 4. 在 viewDidAppear 中兜底（避免被重置）
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
@@ -83,6 +83,9 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
+            [tab.tabBar setSelectedItem:tab.tabBar.items[1]];
+            [tab.tabBar setNeedsLayout];
+            [tab.tabBar layoutIfNeeded];
         }
     }
 }
@@ -181,9 +184,6 @@ static void showSettingsMenu(UIWindow *window) {
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
-// =============================================================
-// Hook UIWindow：双指双击
-// =============================================================
 %hook UIWindow
 - (instancetype)initWithFrame:(CGRect)frame {
     self = %orig;
@@ -206,9 +206,6 @@ static void showSettingsMenu(UIWindow *window) {
 }
 %end
 
-// =============================================================
-// 构造函数
-// =============================================================
 %ctor {
     if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoFullScreenEnabled"]) {
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoFullScreenEnabled"];
