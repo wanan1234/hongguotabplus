@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开页面（无延迟跳转）
-//  直接打开默认页面，不经过首页
+//  HongGuoFullScreen — 修复默认打开页面失效问题
+//  在 viewWillAppear 中延迟设置，确保生效
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -60,51 +60,52 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// 3. 在 viewDidLoad 中立即设置默认页面（无延迟）
-- (void)viewDidLoad {
-    %orig;
-    if (isEnabled()) {
-        // 立即设置，不使用 dispatch_after
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        if (vcs.count > 0) {
-            NSInteger defaultIndex = defaultTabIndex();
-            if (defaultIndex == 1) {
-                NSInteger myIndex = indexOfMyVC(vcs);
-                if (myIndex != -1) {
-                    tab.selectedIndex = myIndex;
-                }
-            } else {
-                tab.selectedIndex = 0;
-            }
-        }
-    }
-}
-
-// 4. 在 viewWillAppear 中再次确保（保险）
+// 3. 设置默认打开页面：在 viewWillAppear 中延迟一帧
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    if (isEnabled()) {
-        // 仅在未选中有效页面时修正
+    if (!isEnabled()) return;
+
+    // 使用 dispatch_async 延迟到下一个 runloop，确保视图已准备
+    dispatch_async(dispatch_get_main_queue(), ^{
         UITabBarController *tab = (UITabBarController *)self;
         NSArray *vcs = tab.viewControllers;
-        NSInteger currentIndex = tab.selectedIndex;
-        if (currentIndex < vcs.count) {
-            UIViewController *currentVC = vcs[currentIndex];
-            NSString *title = currentVC.tabBarItem.title;
-            // 如果当前选中的是无效页面（如剧场），则重定向
-            if ([title isEqualToString:@"剧场"] || [title isEqualToString:@"商城"] || [title isEqualToString:@"福利"]) {
-                NSInteger myIndex = indexOfMyVC(vcs);
-                if (myIndex != -1) {
-                    tab.selectedIndex = myIndex;
-                } else {
-                    tab.selectedIndex = 0;
-                }
+        if (vcs.count == 0) return;
+
+        NSInteger defaultIndex = defaultTabIndex();
+        NSInteger targetIndex = 0;
+        if (defaultIndex == 1) {
+            NSInteger myIndex = indexOfMyVC(vcs);
+            if (myIndex != -1) {
+                targetIndex = myIndex;
             }
-        } else {
-            // 越界则设为首页
-            tab.selectedIndex = 0;
         }
+        // 只有当当前选中的不是目标页时才切换（避免重复）
+        if (tab.selectedIndex != targetIndex) {
+            tab.selectedIndex = targetIndex;
+        }
+    });
+}
+
+// 4. 在 viewDidAppear 中兜底
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!isEnabled()) return;
+
+    UITabBarController *tab = (UITabBarController *)self;
+    NSArray *vcs = tab.viewControllers;
+    if (vcs.count == 0) return;
+
+    NSInteger defaultIndex = defaultTabIndex();
+    NSInteger targetIndex = 0;
+    if (defaultIndex == 1) {
+        NSInteger myIndex = indexOfMyVC(vcs);
+        if (myIndex != -1) {
+            targetIndex = myIndex;
+        }
+    }
+    // 如果仍然不正确，强制修正（确保最终正确）
+    if (tab.selectedIndex != targetIndex) {
+        tab.selectedIndex = targetIndex;
     }
 }
 %end
