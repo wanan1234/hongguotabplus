@@ -1,5 +1,5 @@
 // =============================================================
-//  HongGuoFullScreen — 最终暴力版（强制调整UICollectionView位置）
+//  HongGuoFullScreen — 最终暴力版（修正编译错误）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 彻底移除顶部空白
 //  诊断日志：进入“我的”页面时打印视图树到 Documents/viewHierarchy.log
 // =============================================================
@@ -62,6 +62,16 @@ static void logMyPageViewHierarchy(UIViewController *myVC) {
 }
 
 // =============================================================
+// 辅助：递归获取所有子视图
+// =============================================================
+static void getAllSubviews(UIView *view, NSMutableArray *array) {
+    [array addObject:view];
+    for (UIView *sub in view.subviews) {
+        getAllSubviews(sub, array);
+    }
+}
+
+// =============================================================
 // 暴力调整布局（隐藏所有横幅 + 强制移动UICollectionView）
 // =============================================================
 static void hideTopBannerInMyPage(UIViewController *myVC) {
@@ -71,7 +81,7 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
 
     // ---- 1. 隐藏所有高度 > 200 的 FQReaderSaaSBaseImageView（无论层级） ----
     NSMutableArray *allViews = [NSMutableArray array];
-    [self getAllSubviews:rootView intoArray:allViews];
+    getAllSubviews(rootView, allViews);
     for (UIView *view in allViews) {
         if ([NSStringFromClass([view class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
             if (view.frame.size.height > 200) {
@@ -112,7 +122,6 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
     // ---- 4. 找到滚动内容中的 UICollectionView 并上移 ----
     for (UIView *sub in scrollView.subviews) {
         if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollContentView"]) {
-            // 遍历内容视图的子视图，找到 UICollectionView
             for (UIView *child in sub.subviews) {
                 if ([child isKindOfClass:[UICollectionView class]]) {
                     CGRect frame = child.frame;
@@ -135,14 +144,6 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
         [scrollView layoutIfNeeded];
         NSLog(@"[HongGuo] 刷新布局完成");
     });
-}
-
-// 辅助：递归获取所有子视图
-static void getAllSubviews(UIView *view, NSMutableArray *array) {
-    [array addObject:view];
-    for (UIView *sub in view.subviews) {
-        getAllSubviews(sub, array);
-    }
 }
 
 // =============================================================
