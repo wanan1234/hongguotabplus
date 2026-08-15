@@ -1,17 +1,20 @@
 // =============================================================
-//  HongGuoFullScreen — 最终稳定版（基于可用版本，仅移除日志）
-//  保留所有 Hook 逻辑，只删除 WriteLog 调用
-//  包含双指双击弹窗开关 + 重启功能
+//  HongGuoFullScreen — 精简 TabBar + 默认打开页面选择
+//  功能：1. 只保留首页和我的 2. 双指双击开关 3. 默认打开页面选择
+//  稳定版本 2026-08-15
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 
-// ---------- 开关 ----------
 static BOOL isEnabled() {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
 }
 
-// ---------- 查找“我的”控制器索引 ----------
+// 默认打开页面：0=首页，1=我的
+static NSInteger defaultTabIndex() {
+    return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
+}
+
 static NSInteger indexOfMyVC(NSArray *vcs) {
     for (NSInteger i = 0; i < vcs.count; i++) {
         UIViewController *vc = vcs[i];
@@ -23,13 +26,9 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// =============================================================
-// Hook SSTabBar（过滤 items）— 与可用版本完全一致
-// =============================================================
+// 1. 过滤 SSTabBar 的 items（只显示首页和我的）
 %hook SSTabBar
-
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    // 保留可用版本的逻辑，只移除 WriteLog 调用
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
@@ -37,24 +36,17 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     }
     %orig(items, animated);
 }
-
 %end
 
-// =============================================================
-// Hook SSTabBarController（修正 setSelectedIndex）— 与可用版本完全一致
-// =============================================================
+// 2. 拦截 setSelectedIndex，修正跳转错乱
 %hook SSTabBarController
-
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
         NSArray *vcs = tab.viewControllers;
-        
         if (selectedIndex < vcs.count) {
             UIViewController *targetVC = vcs[selectedIndex];
             NSString *title = targetVC.tabBarItem.title;
-            
-            // 如果选中的是“剧场”，重定向到“我的”
             if ([title isEqualToString:@"剧场"]) {
                 NSInteger myIndex = indexOfMyVC(vcs);
                 if (myIndex != -1) {
@@ -67,14 +59,34 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
             }
         }
     }
-    
     %orig(selectedIndex);
 }
 
+// 3. 在 viewDidLoad 中设置默认打开页面
+- (void)viewDidLoad {
+    %orig;
+    if (isEnabled()) {
+        // 延迟一小段时间，确保视图加载完成
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSInteger defaultIndex = defaultTabIndex();
+            // 如果默认是“我的”，且能找到“我的”控制器，则跳转
+            if (defaultIndex == 1) {
+                NSArray *vcs = self.viewControllers;
+                NSInteger myIndex = indexOfMyVC(vcs);
+                if (myIndex != -1) {
+                    self.selectedIndex = myIndex;
+                }
+            } else {
+                // 默认首页
+                self.selectedIndex = 0;
+            }
+        });
+    }
+}
 %end
 
 // =============================================================
-// 双指双击菜单
+// 双指双击菜单（增加默认页面设置）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -86,13 +98,47 @@ static void showToast(NSString *msg, UIWindow *window) {
     });
 }
 
+// 显示默认页面选择子菜单
+static void showDefaultTabMenu(UIWindow *window) {
+    UIViewController *topVC = window.rootViewController;
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认打开页面"
+                                                                   message:@"选择应用启动时默认进入的页面"
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    
+    NSInteger current = defaultTabIndex();
+    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        showToast(@"已设置默认打开首页，重启生效", window);
+    }]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 我的", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"HongGuoDefaultTab"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        showToast(@"已设置默认打开我的，重启生效", window);
+    }]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+        alert.popoverPresentationController.sourceView = window;
+        alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
+    }
+    [topVC presentViewController:alert animated:YES completion:nil];
+}
+
 static void showSettingsMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
 
     BOOL enabled = isEnabled();
+    NSInteger defaultTab = defaultTabIndex();
+    NSString *defaultText = defaultTab == 0 ? @"首页" : @"我的";
+    
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简Tab控制"
-                                                                   message:[NSString stringWithFormat:@"当前状态：%@", enabled ? @"已开启" : @"已关闭"]
+                                                                   message:[NSString stringWithFormat:@"当前状态：%@\n默认打开：%@", enabled ? @"已开启" : @"已关闭", defaultText]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
     [alert addAction:[UIAlertAction actionWithTitle:enabled ? @"关闭功能" : @"开启功能" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
@@ -121,6 +167,11 @@ static void showSettingsMenu(UIWindow *window) {
         [top presentViewController:confirm animated:YES completion:nil];
     }]];
 
+    // 默认页面设置
+    [alert addAction:[UIAlertAction actionWithTitle:@"设置默认打开页面" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        showDefaultTabMenu(window);
+    }]];
+
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
@@ -133,7 +184,6 @@ static void showSettingsMenu(UIWindow *window) {
 // Hook UIWindow：双指双击
 // =============================================================
 %hook UIWindow
-
 - (instancetype)initWithFrame:(CGRect)frame {
     self = %orig;
     if (self) {
@@ -144,7 +194,6 @@ static void showSettingsMenu(UIWindow *window) {
     }
     return self;
 }
-
 %new
 - (void)hg_handleDoubleTap:(UITapGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateRecognized) {
@@ -154,7 +203,6 @@ static void showSettingsMenu(UIWindow *window) {
         showSettingsMenu(self);
     }
 }
-
 %end
 
 // =============================================================
@@ -165,5 +213,9 @@ static void showSettingsMenu(UIWindow *window) {
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoFullScreenEnabled"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    NSLog(@"[HongGuo] TabBar精简插件加载成功，开关状态：%@", isEnabled() ? @"开启" : @"关闭");
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoDefaultTab"]) {
+        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+    NSLog(@"[HongGuo] TabBar精简插件加载成功，默认打开：%@", defaultTabIndex() == 0 ? @"首页" : @"我的");
 }
