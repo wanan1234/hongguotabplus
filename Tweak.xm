@@ -1,8 +1,9 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（强制过滤 + 系统自动颜色）
+//  HongGuoFullScreen — 最终版（遍历匹配 + 系统自动颜色）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  逻辑：采用代码1的索引映射，确保切换正常
-//  颜色：不设barTintColor，让系统自动根据页面变色
+//  逻辑：采用代码1的索引映射，切换正常
+//  高亮：遍历 tabBar.items 匹配标题，不依赖索引
+//  颜色：不设 barTintColor，让系统自动
 //  日志：保留详细日志
 // =============================================================
 #import <UIKit/UIKit.h>
@@ -48,7 +49,7 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
-// 强制过滤 tabBar.items 为首页和我的（每次调用都重新设置，确保有效）
+// 强制过滤 tabBar.items 为首页和我的（可选，但保留）
 static void forceFilterTabBarItems(UITabBarController *tab) {
     if (!tab || !isEnabled()) return;
     UITabBar *tabBar = tab.tabBar;
@@ -58,20 +59,44 @@ static void forceFilterTabBarItems(UITabBarController *tab) {
     UITabBarItem *homeItem = ((UIViewController *)vcs[0]).tabBarItem;
     UITabBarItem *myItem = ((UIViewController *)vcs[4]).tabBarItem;
     if (homeItem && myItem) {
-        // 每次都强制设置，确保 items 始终是这两个
-        [tabBar setItems:@[homeItem, myItem] animated:NO];
-        WriteLog(@"强制过滤 items: 首页=%@, 我的=%@", homeItem.title, myItem.title);
+        if (tabBar.items.count != 2 ||
+            ![tabBar.items[0].title isEqualToString:homeItem.title] ||
+            ![tabBar.items[1].title isEqualToString:myItem.title]) {
+            [tabBar setItems:@[homeItem, myItem] animated:NO];
+            WriteLog(@"强制过滤 items: 首页=%@, 我的=%@", homeItem.title, myItem.title);
+        }
     }
 }
 
-// 手动切换视图，并设置高亮（不设置 barTintColor）
+// 同步 TabBar 高亮（根据当前 selectedViewController 的标题遍历匹配）
+static void syncTabBarHighlight(UITabBarController *tab) {
+    if (!tab || !isEnabled()) return;
+    UITabBar *tabBar = tab.tabBar;
+    UIViewController *selected = tab.selectedViewController;
+    if (!selected) return;
+
+    NSString *title = selected.tabBarItem.title;
+    for (UITabBarItem *item in tabBar.items) {
+        if ([item.title isEqualToString:title]) {
+            if (tabBar.selectedItem != item) {
+                tabBar.selectedItem = item;
+                WriteLog(@"syncTabBarHighlight: 匹配高亮 %@", title);
+            }
+            break;
+        }
+    }
+    [tabBar setNeedsLayout];
+    [tabBar layoutIfNeeded];
+}
+
+// 手动切换视图（核心）
 static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     if (!tab || !isEnabled()) return;
     NSArray *vcs = tab.viewControllers;
     if (vcs.count < 5) return;
     UITabBar *tabBar = tab.tabBar;
 
-    // 1. 强制过滤 items（确保只有首页和我的）
+    // 1. 尝试过滤 items（减少不必要的 item，但不是必须）
     forceFilterTabBarItems(tab);
 
     // 2. 映射真实索引
@@ -93,24 +118,18 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         tab.selectedViewController = targetVC;
     }
 
-    // 4. 再次强制过滤（防止在切换视图时系统重置了 items）
+    // 4. 再次过滤（防止切换时被重置）
     forceFilterTabBarItems(tab);
 
-    // 5. 设置高亮（此时 items 应为2个，直接取 filteredIndex）
-    if (filteredIndex >= 0 && filteredIndex < tabBar.items.count) {
-        UITabBarItem *item = tabBar.items[filteredIndex];
-        if (tabBar.selectedItem != item) {
-            tabBar.selectedItem = item;
-            WriteLog(@"设置高亮: %@", item.title);
-        }
-    }
+    // 5. 同步高亮（遍历匹配）
+    syncTabBarHighlight(tab);
 
-    [tabBar setNeedsLayout];
-    [tabBar layoutIfNeeded];
+    // 6. 不设置 barTintColor，让系统自动管理颜色
+    WriteLog(@"switchToTab 完成，当前高亮: %@", tabBar.selectedItem.title);
 }
 
 // =============================================================
-// Hook SSTabBar — 过滤 items
+// Hook SSTabBar
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
@@ -163,7 +182,6 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         return;
     }
 
-    // 强制过滤 items
     forceFilterTabBarItems(tab);
 
     NSInteger filteredIndex = -1;
@@ -201,13 +219,7 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UITabBarController *tab = (UITabBarController *)self;
             forceFilterTabBarItems(tab);
-            // 再次确保高亮
-            if (tab.tabBar.items.count == 2) {
-                tab.tabBar.selectedItem = tab.tabBar.items[1];
-                [tab.tabBar setNeedsLayout];
-                [tab.tabBar layoutIfNeeded];
-                WriteLog(@"最终确保高亮: 我的");
-            }
+            syncTabBarHighlight(tab); // 再次确保高亮
         });
     }
 }
@@ -215,6 +227,6 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 %end
 
 // =============================================================
-// 双指双击菜单（完整保留，省略以节省篇幅）
+// 双指双击菜单（完整保留）
 // =============================================================
-// ...（您之前的菜单代码，此处不再重复）
+// ...（您之前的菜单代码，请完整粘贴）
