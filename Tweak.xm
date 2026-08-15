@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（模拟点击刷新）
-//  通过模拟点击“我的”标签强制刷新 TabBar 外观
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（纯刷新）
+//  通过重置 barTintColor 强制刷新 tabBar 背景
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -73,7 +73,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig;
 }
 
-// 4. 在 viewDidAppear 中模拟点击“我的”标签，强制刷新 TabBar
+// 4. 在 viewDidAppear 中强制刷新 tabBar 背景
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (!isEnabled() || defaultTabIndex() != 1) return;
@@ -82,26 +82,36 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     dispatch_once(&onceToken, ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UITabBarController *tab = (UITabBarController *)self;
-            NSArray *vcs = tab.viewControllers;
-            NSInteger myIndex = indexOfMyVC(vcs);
-            if (myIndex == -1) return;
-
             UITabBar *tabBar = tab.tabBar;
-            NSArray *buttons = tabBar.subviews;
-            // 遍历子视图找到 UITabBarButton
-            for (UIView *view in buttons) {
-                if ([NSStringFromClass([view class]) containsString:@"UITabBarButton"]) {
-                    NSInteger index = [buttons indexOfObject:view];
-                    if (index == myIndex) {
-                        // 强制转换为 UIControl 并发送点击事件
-                        if ([view isKindOfClass:[UIControl class]]) {
-                            UIControl *button = (UIControl *)view;
-                            [button sendActionsForControlEvents:UIControlEventTouchUpInside];
-                        }
-                        break;
-                    }
-                }
+            
+            // 方法1：重置 barTintColor 强制刷新
+            UIColor *currentColor = tabBar.barTintColor;
+            if (currentColor) {
+                tabBar.barTintColor = nil;
+                tabBar.barTintColor = currentColor;
             }
+            // 方法2：重置背景图片（如果有）
+            UIImage *bgImage = tabBar.backgroundImage;
+            if (bgImage) {
+                tabBar.backgroundImage = nil;
+                tabBar.backgroundImage = bgImage;
+            }
+            // 方法3：强制布局
+            [tabBar setNeedsLayout];
+            [tabBar layoutIfNeeded];
+            
+            // 方法4：尝试通过 KVC 获取背景视图并刷新
+            id backgroundView = [tabBar valueForKey:@"_backgroundView"];
+            if (backgroundView && [backgroundView respondsToSelector:@selector(setNeedsDisplay)]) {
+                [backgroundView performSelector:@selector(setNeedsDisplay)];
+            }
+            
+            // 方法5：隐藏再显示（极轻量动画）
+            [UIView animateWithDuration:0.01 animations:^{
+                tabBar.alpha = 0.99;
+            } completion:^(BOOL finished) {
+                tabBar.alpha = 1.0;
+            }];
         });
     });
 }
