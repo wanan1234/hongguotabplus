@@ -1,10 +1,11 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版（只记录，不修改）
-//  使用强制类型转换和KVC，确保编译通过
+//  HongGuoFullScreen — 诊断版（使用 objc_msgSend 绕过前向声明）
+//  只记录，不修改
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <stdarg.h>
+#import <objc/message.h>
 
 static void WriteLog(NSString *format, ...) {
     va_list args;
@@ -102,13 +103,12 @@ static void logControllerState(UITabBarController *tab, NSString *tag) {
 }
 
 // =============================================================
-// Hook UITabBar（覆盖所有子类，包括 CYLTabBar 和 SSTabBar）
+// Hook UITabBar（覆盖所有子类）
 // =============================================================
 %hook UITabBar
 
 - (void)layoutSubviews {
     %orig;
-    // 检测 alpha 变化
     static CGFloat lastAlpha = -1;
     if (fabs(self.alpha - lastAlpha) > 0.001) {
         lastAlpha = self.alpha;
@@ -183,16 +183,17 @@ static void logControllerState(UITabBarController *tab, NSString *tag) {
 %end
 
 // =============================================================
-// Hook AWEUIThemeManager（用 KVC 获取属性）
+// Hook AWEUIThemeManager（使用 objc_msgSend）
 // =============================================================
 %hook AWEUIThemeManager
 
 - (void)setIsLightTheme:(BOOL)isLightTheme {
-    // 获取旧值
-    NSNumber *oldValue = [self valueForKey:@"isLightTheme"];
-    WriteLog(@"[AWEUIThemeManager setIsLightTheme] %d -> %d", oldValue ? [oldValue boolValue] : -1, isLightTheme);
+    // 使用 objc_msgSend 获取旧值
+    SEL selector = @selector(isLightTheme);
+    BOOL (*getter)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
+    BOOL oldValue = getter(self, selector);
+    WriteLog(@"[AWEUIThemeManager setIsLightTheme] %d -> %d", oldValue, isLightTheme);
     %orig(isLightTheme);
-    // 延迟记录 tabBar 状态
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
         UIViewController *root = window.rootViewController;
