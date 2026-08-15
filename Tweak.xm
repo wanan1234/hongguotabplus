@@ -1,10 +1,9 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（遍历匹配 + 系统自动颜色）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  逻辑：采用代码1的索引映射确保切换正常
-//  高亮：遍历 tabBar.items 匹配标题，不依赖过滤索引
-//  颜色：不设 barTintColor，让系统自动根据页面变色
-//  日志：保留详细日志
+//  HongGuoFullScreen — 最终融合版（代码2颜色 + 索引映射）
+//  功能：精简Tab栏（首页、我的）+ 默认启动页 + 双指双击菜单
+//  逻辑：借鉴代码2的切换方式，但增加索引映射，确保点击正常
+//  颜色：由系统自动管理（首页黑，我的白）
+//  日志：保留
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -49,103 +48,81 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
-// 获取真实索引
-static NSInteger getRealIndex(NSArray *vcs, NSString *title) {
+static NSInteger indexOfMyVC(NSArray *vcs) {
     for (NSInteger i = 0; i < vcs.count; i++) {
         UIViewController *vc = vcs[i];
-        if ([vc.tabBarItem.title isEqualToString:title]) {
+        NSString *title = vc.tabBarItem.title;
+        if ([title isEqualToString:@"我的"]) {
             return i;
         }
     }
     return -1;
 }
 
-// 手动切换视图，并设置高亮（遍历匹配，不依赖过滤索引）
-static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
+// =============================================================
+// 强制切换到“我的”（完全复制代码2）
+// =============================================================
+static void forceSelectMyTab(UITabBarController *tab) {
     if (!tab || !isEnabled()) return;
     NSArray *vcs = tab.viewControllers;
-    if (vcs.count < 5) return;
+    NSInteger myIndex = indexOfMyVC(vcs);
+    if (myIndex == -1) return;
+    
+    if (tab.selectedViewController != vcs[myIndex]) {
+        tab.selectedViewController = vcs[myIndex];
+    }
+    
     UITabBar *tabBar = tab.tabBar;
-
-    // 确定目标标题
-    NSString *targetTitle = (filteredIndex == 0) ? @"首页" : @"我的";
-    NSInteger realIndex = getRealIndex(vcs, targetTitle);
-    if (realIndex == -1) {
-        WriteLog(@"⚠️ 未找到标题为 %@ 的控制器", targetTitle);
-        return;
-    }
-
-    UIViewController *targetVC = vcs[realIndex];
-    WriteLog(@"切换: 过滤索引 %ld → 真实索引 %ld (%@)", (long)filteredIndex, (long)realIndex, targetTitle);
-
-    // 切换视图
-    if (tab.selectedViewController != targetVC) {
-        tab.selectedViewController = targetVC;
-    }
-
-    // 遍历 tabBar.items 匹配高亮（不依赖索引）
-    UITabBarItem *targetItem = nil;
     for (UITabBarItem *item in tabBar.items) {
-        if ([item.title isEqualToString:targetTitle]) {
-            targetItem = item;
+        if ([item.title isEqualToString:@"我的"]) {
+            if (tabBar.selectedItem != item) {
+                tabBar.selectedItem = item;
+            }
             break;
         }
     }
-
-    if (targetItem) {
-        if (tabBar.selectedItem != targetItem) {
-            tabBar.selectedItem = targetItem;
-            WriteLog(@"✅ 设置高亮: %@", targetItem.title);
-        }
-    } else {
-        WriteLog(@"⚠️ 未在 tabBar.items 中找到标题为 %@ 的 item", targetTitle);
-        // 尝试重新过滤 items
-        UITabBarItem *homeItem = ((UIViewController *)vcs[0]).tabBarItem;
-        UITabBarItem *myItem = ((UIViewController *)vcs[4]).tabBarItem;
-        if (homeItem && myItem) {
-            [tabBar setItems:@[homeItem, myItem] animated:NO];
-            WriteLog(@"强制重置 items 为首页和我的");
-            // 再次查找
-            for (UITabBarItem *item in tabBar.items) {
-                if ([item.title isEqualToString:targetTitle]) {
-                    targetItem = item;
-                    break;
-                }
-            }
-            if (targetItem) {
-                tabBar.selectedItem = targetItem;
-                WriteLog(@"✅ 重新设置高亮: %@", targetItem.title);
-            }
-        }
-    }
-
-    // 不设置 barTintColor，让系统自动
+    
     [tabBar setNeedsLayout];
     [tabBar layoutIfNeeded];
-    WriteLog(@"当前 barTintColor: %@", tabBar.barTintColor);
-    WriteLog(@"switchToTab 完成，当前高亮: %@", tabBar.selectedItem.title);
+}
+
+// 强制切换到首页
+static void forceSelectHomeTab(UITabBarController *tab) {
+    if (!tab || !isEnabled()) return;
+    NSArray *vcs = tab.viewControllers;
+    if (vcs.count == 0) return;
+    UIViewController *homeVC = vcs[0];
+    if (tab.selectedViewController != homeVC) {
+        tab.selectedViewController = homeVC;
+    }
+    UITabBar *tabBar = tab.tabBar;
+    if (tabBar.items.count > 0) {
+        if (tabBar.selectedItem != tabBar.items[0]) {
+            tabBar.selectedItem = tabBar.items[0];
+        }
+    }
+    [tabBar setNeedsLayout];
+    [tabBar layoutIfNeeded];
 }
 
 // =============================================================
-// Hook SSTabBar — 过滤 items（保留，但高亮不再依赖）
+// Hook SSTabBar — 过滤 items（完全复制代码2）
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
-        UITabBarItem *homeItem = items[0];
-        UITabBarItem *myItem = items[4];
-        NSArray *filtered = @[homeItem, myItem];
+        NSArray *filtered = @[items[0], items[4]];
         WriteLog(@"SSTabBar 过滤: 原 %lu → 过滤后 %lu", (unsigned long)items.count, (unsigned long)filtered.count);
         %orig(filtered, animated);
-        
-        UIResponder *responder = (UIResponder *)self;
-        while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
-            responder = [responder nextResponder];
-        }
-        if ([responder isKindOfClass:[UITabBarController class]]) {
-            UITabBarController *tab = (UITabBarController *)responder;
-            NSInteger targetIndex = (defaultTabIndex() == 1) ? 1 : 0;
-            switchToTab(tab, targetIndex);
+        // 如果默认是我的，立即修正高亮
+        if (defaultTabIndex() == 1) {
+            UIResponder *responder = (UIResponder *)self;
+            while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
+                responder = [responder nextResponder];
+            }
+            if ([responder isKindOfClass:[UITabBarController class]]) {
+                forceSelectMyTab((UITabBarController *)responder);
+            }
         }
         return;
     }
@@ -154,30 +131,11 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 %end
 
 // =============================================================
-// Hook SSTabBarController
+// Hook SSTabBarController — 索引映射 + 代码2的切换
 // =============================================================
 %hook SSTabBarController
 
-- (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers animated:(BOOL)animated {
-    WriteLog(@"setViewControllers 被调用，原数量: %lu", (unsigned long)viewControllers.count);
-    %orig(viewControllers, animated);
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        // 尝试过滤 items，但不是必须
-        NSArray *vcs = tab.viewControllers;
-        if (vcs.count >= 5) {
-            UITabBarItem *homeItem = ((UIViewController *)vcs[0]).tabBarItem;
-            UITabBarItem *myItem = ((UIViewController *)vcs[4]).tabBarItem;
-            if (homeItem && myItem) {
-                [tab.tabBar setItems:@[homeItem, myItem] animated:NO];
-            }
-        }
-        if (defaultTabIndex() == 1) {
-            switchToTab(tab, 1);
-        }
-    }
-}
-
+// 拦截 setSelectedIndex，映射索引后调用原始
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     WriteLog(@"===== setSelectedIndex 被调用: %ld =====", (long)selectedIndex);
     UITabBarController *tab = (UITabBarController *)self;
@@ -188,59 +146,48 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         return;
     }
 
-    NSInteger filteredIndex = -1;
-    // 如果 items 只有2个，直接映射
+    // 如果已经过滤（只有2个item），映射索引
     if (tabBar.items.count == 2) {
+        NSInteger realIndex = -1;
+        // 判断传入索引含义
         if (selectedIndex < tabBar.items.count) {
-            filteredIndex = selectedIndex;
+            // 传入的是过滤索引
+            if (selectedIndex == 0) realIndex = 0;
+            else if (selectedIndex == 1) realIndex = indexOfMyVC(tab.viewControllers);
         } else {
-            if (selectedIndex == 0) filteredIndex = 0;
-            else if (selectedIndex == 4) filteredIndex = 1;
-            else filteredIndex = (defaultTabIndex() == 1) ? 1 : 0;
+            // 传入的是真实索引
+            if (selectedIndex == 0) realIndex = 0;
+            else if (selectedIndex == indexOfMyVC(tab.viewControllers)) realIndex = selectedIndex;
+            else {
+                // 其他真实索引（剧场等）重定向到首页
+                realIndex = 0;
+                WriteLog(@"其他真实索引 %ld → 重定向到首页", (long)selectedIndex);
+            }
         }
-    } else {
-        // items 多于2个，根据真实索引映射
-        if (selectedIndex == 0) filteredIndex = 0;
-        else if (selectedIndex == 4) filteredIndex = 1;
-        else filteredIndex = (defaultTabIndex() == 1) ? 1 : 0;
+        if (realIndex >= 0 && realIndex < tab.viewControllers.count) {
+            WriteLog(@"映射后调用原始 setSelectedIndex: %ld", (long)realIndex);
+            %orig(realIndex);
+            return;
+        }
     }
-    if (filteredIndex < 0 || filteredIndex > 1) filteredIndex = 0;
-
-    WriteLog(@"映射后过滤索引: %ld", (long)filteredIndex);
-    switchToTab(tab, filteredIndex);
+    // 未过滤或映射失败，走原始
+    %orig(selectedIndex);
 }
 
+// viewWillAppear 中设置默认启动页
 - (void)viewWillAppear:(BOOL)animated {
-    WriteLog(@"viewWillAppear 调用");
     if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        switchToTab(tab, 1);
+        forceSelectMyTab((UITabBarController *)self);
     }
     %orig;
 }
 
+// viewDidAppear 中再次确保
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UITabBarController *tab = (UITabBarController *)self;
-            switchToTab(tab, 1);
-        });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UITabBarController *tab = (UITabBarController *)self;
-            // 再次确保高亮
-            UITabBar *tabBar = tab.tabBar;
-            for (UITabBarItem *item in tabBar.items) {
-                if ([item.title isEqualToString:@"我的"]) {
-                    if (tabBar.selectedItem != item) {
-                        tabBar.selectedItem = item;
-                        [tabBar setNeedsLayout];
-                        [tabBar layoutIfNeeded];
-                    }
-                    break;
-                }
-            }
-            WriteLog(@"最终确保高亮: 我的");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            forceSelectMyTab((UITabBarController *)self);
         });
     }
 }
