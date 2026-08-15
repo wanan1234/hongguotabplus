@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版 v3（彻底移除横幅 + 强制布局）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 彻底移除顶部
+//  HongGuoFullScreen — 诊断版 v4（强制滚动归零 + 多次刷新）
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 强制顶部归零
 //  诊断日志：进入“我的”页面时打印视图树到 Documents/viewHierarchy.log
 // =============================================================
 #import <UIKit/UIKit.h>
@@ -62,7 +62,7 @@ static void logMyPageViewHierarchy(UIViewController *myVC) {
 }
 
 // =============================================================
-// 彻底隐藏顶部 + 强制布局（移除横幅 + 调整滚动视图）
+// 彻底隐藏顶部 + 强制滚动归零（多次尝试）
 // =============================================================
 static void hideTopBannerInMyPage(UIViewController *myVC) {
     if (!myVC || !isEnabled()) return;
@@ -108,7 +108,7 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
     }
 
     if (scrollView) {
-        // 3. 调整滚动视图的 frame（确保从顶部开始）
+        // 3. 强制调整滚动视图的 frame（确保从顶部开始）
         CGRect frame = scrollView.frame;
         if (frame.origin.y != 0) {
             frame.origin.y = 0;
@@ -124,12 +124,23 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
             NSLog(@"[HongGuo] contentInset.top 已重置为 0");
         }
 
-        // 5. 强制归零 contentOffset（延迟执行，确保布局完成）
+        // 5. 强制归零 contentOffset（立即执行+延迟重复）
         dispatch_async(dispatch_get_main_queue(), ^{
             [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
             [scrollView setNeedsLayout];
             [scrollView layoutIfNeeded];
-            NSLog(@"[HongGuo] 滚动视图偏移归零并刷新布局");
+            NSLog(@"[HongGuo] 滚动视图偏移归零（第1次）");
+        });
+        // 再延迟执行两次，确保系统不会覆盖
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
+            [scrollView layoutIfNeeded];
+            NSLog(@"[HongGuo] 滚动视图偏移归零（第2次）");
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
+            [scrollView layoutIfNeeded];
+            NSLog(@"[HongGuo] 滚动视图偏移归零（第3次）");
         });
 
         // 6. 隐藏滚动内容中的顶部占位视图（高度约91）
@@ -204,6 +215,10 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
                 hideTopBannerInMyPage(selectedVC);
                 logMyPageViewHierarchy(selectedVC);
             });
+            // 额外再延迟一次，确保完全生效
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                hideTopBannerInMyPage(selectedVC);
+            });
         }
     }
 }
@@ -229,6 +244,9 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             hideTopBannerInMyPage(selectedVC);
             logMyPageViewHierarchy(selectedVC);
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            hideTopBannerInMyPage(selectedVC);
         });
     }
 }
