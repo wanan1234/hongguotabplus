@@ -1,6 +1,8 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断 + 修复版（不碰 alpha）
-//  修正 frame，设置 barTintColor，保留完整诊断日志
+//  HongGuoFullScreen — 最终修复版（过滤+黑块+无空白）
+//  1. 强制拦截所有 setItems，只保留首页和我的
+//  2. 在 viewDidAppear 后设置 barTintColor + alpha=1（消除黑块）
+//  3. 不移改 frame，避免空白
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -61,12 +63,12 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 // ---------- 诊断：记录 tabBar 状态 ----------
 static void logTabBarState(UITabBar *tabBar, NSString *tag) {
     if (!tabBar) return;
-    WriteLog(@"  [%@] alpha=%.3f frame=%@ barTintColor=%@ bgColor=%@",
+    WriteLog(@"  [%@] alpha=%.3f frame=%@ barTintColor=%@ itemsCount=%lu",
              tag,
              tabBar.alpha,
              NSStringFromCGRect(tabBar.frame),
              tabBar.barTintColor ?: @"nil",
-             tabBar.backgroundColor ?: @"nil");
+             (unsigned long)tabBar.items.count);
 }
 
 // ---------- 获取当前页面背景色 ----------
@@ -80,26 +82,36 @@ static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
     return [UIColor whiteColor];
 }
 
-// ---------- 修复 tabBar ----------
+// ---------- 强制过滤 items（保证只有首页和我的） ----------
+static NSArray *filterItems(NSArray *items) {
+    if (!isEnabled() || items.count <= 2) return items;
+    NSMutableArray *filtered = [NSMutableArray array];
+    for (UITabBarItem *item in items) {
+        NSString *title = item.title;
+        if ([title isEqualToString:@"首页"] || [title isEqualToString:@"我的"]) {
+            [filtered addObject:item];
+        }
+    }
+    return filtered;
+}
+
+// ---------- 修复 tabBar（设置颜色 + alpha） ----------
 static void fixTabBar(UITabBarController *tab) {
     if (!tab) return;
     UITabBar *tabBar = tab.tabBar;
 
-    // 1. 修正 frame（基于诊断数据）
-    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
-    CGFloat tabBarHeight = 84.0;
-    CGRect correctFrame = CGRectMake(0, screenHeight - tabBarHeight, tabBar.frame.size.width, tabBarHeight);
-    if (!CGRectEqualToRect(tabBar.frame, correctFrame)) {
-        WriteLog(@"fixTabBar: 修正 frame 从 %@ 到 %@", NSStringFromCGRect(tabBar.frame), NSStringFromCGRect(correctFrame));
-        tabBar.frame = correctFrame;
-    }
-
-    // 2. 设置 barTintColor 触发重绘（不修改 alpha）
+    // 1. 强制设置 barTintColor（匹配背景）
     UIColor *bgColor = getCurrentPageBackgroundColor(tab);
     if (bgColor) {
         tabBar.barTintColor = bgColor;
         tabBar.translucent = NO;
         WriteLog(@"fixTabBar: 设置 barTintColor = %@", bgColor);
+    }
+
+    // 2. 设置 alpha=1（消除黑块）
+    if (tabBar.alpha != 1.0) {
+        tabBar.alpha = 1.0;
+        WriteLog(@"fixTabBar: 设置 alpha = 1.0");
     }
 
     // 3. 刷新背景视图
@@ -115,33 +127,29 @@ static void fixTabBar(UITabBarController *tab) {
 }
 
 // =============================================================
-// Hook CYLTabBar（红果实际使用的 TabBar）
+// Hook CYLTabBar — 拦截所有 setItems，强制过滤
 // =============================================================
 %hook CYLTabBar
 
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    if (isEnabled() && items.count > 2) {
-        NSArray *filtered = @[items[0], items[4]];
-        WriteLog(@"CYLTabBar setItems: 过滤 items 到 2 个");
-        %orig(filtered, animated);
-        // 查找控制器并修复
-        id responder = self;
-        while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
-            responder = [responder nextResponder];
-        }
-        if ([responder isKindOfClass:[UITabBarController class]]) {
-            fixTabBar((UITabBarController *)responder);
-        }
-        return;
+    NSArray *filtered = filterItems(items);
+    WriteLog(@"CYLTabBar setItems: 原 count=%lu -> 过滤后 count=%lu", (unsigned long)items.count, (unsigned long)filtered.count);
+    %orig(filtered, animated);
+    // 过滤后立即修复 tabBar
+    id responder = self;
+    while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
+        responder = [responder nextResponder];
     }
-    %orig(items, animated);
+    if ([responder isKindOfClass:[UITabBarController class]]) {
+        fixTabBar((UITabBarController *)responder);
+    }
 }
 
-// 记录 setFrame 调用
+// 只记录 setFrame，不修改
 - (void)setFrame:(CGRect)frame {
+    // 不修改 frame，只记录
     WriteLog(@"CYLTabBar setFrame: %@", NSStringFromCGRect(frame));
     %orig(frame);
-    logTabBarState((UITabBar *)self, @"setFrame 完成");
 }
 
 %end
@@ -158,6 +166,11 @@ static void fixTabBar(UITabBarController *tab) {
         UITabBarController *tab = (UITabBarController *)self;
         if (tab.selectedIndex >= tab.viewControllers.count) {
             tab.selectedIndex = 0;
+        }
+        // 立即过滤一次
+        NSArray *filtered = filterItems(tab.tabBar.items);
+        if (filtered.count < tab.tabBar.items.count) {
+            [tab.tabBar setItems:filtered animated:NO];
         }
         logTabBarState(tab.tabBar, @"viewDidLoad");
         fixTabBar(tab);
@@ -176,7 +189,13 @@ static void fixTabBar(UITabBarController *tab) {
     }
     %orig;
     if (isEnabled()) {
-        fixTabBar((UITabBarController *)self);
+        // 再次过滤和修复
+        UITabBarController *tab = (UITabBarController *)self;
+        NSArray *filtered = filterItems(tab.tabBar.items);
+        if (filtered.count < tab.tabBar.items.count) {
+            [tab.tabBar setItems:filtered animated:NO];
+        }
+        fixTabBar(tab);
     }
 }
 
@@ -189,6 +208,11 @@ static void fixTabBar(UITabBarController *tab) {
         WriteLog(@"viewDidAppear: 开始延迟修复");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UITabBarController *tab = (UITabBarController *)self;
+            // 再次过滤
+            NSArray *filtered = filterItems(tab.tabBar.items);
+            if (filtered.count < tab.tabBar.items.count) {
+                [tab.tabBar setItems:filtered animated:NO];
+            }
             fixTabBar(tab);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 fixTabBar(tab);
@@ -201,7 +225,16 @@ static void fixTabBar(UITabBarController *tab) {
 - (void)viewDidLayoutSubviews {
     %orig;
     if (isEnabled()) {
-        fixTabBar((UITabBarController *)self);
+        UITabBarController *tab = (UITabBarController *)self;
+        // 只修复颜色和 alpha，不修改 frame
+        UIColor *bgColor = getCurrentPageBackgroundColor(tab);
+        if (bgColor) {
+            tab.tabBar.barTintColor = bgColor;
+            tab.tabBar.translucent = NO;
+        }
+        if (tab.tabBar.alpha != 1.0) {
+            tab.tabBar.alpha = 1.0;
+        }
     }
 }
 
@@ -230,7 +263,13 @@ static void fixTabBar(UITabBarController *tab) {
     }
     %orig(selectedIndex);
     if (isEnabled()) {
-        fixTabBar((UITabBarController *)self);
+        UITabBarController *tab = (UITabBarController *)self;
+        // 切换后确保过滤和修复
+        NSArray *filtered = filterItems(tab.tabBar.items);
+        if (filtered.count < tab.tabBar.items.count) {
+            [tab.tabBar setItems:filtered animated:NO];
+        }
+        fixTabBar(tab);
     }
 }
 %end
