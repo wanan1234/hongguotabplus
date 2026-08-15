@@ -115,13 +115,13 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 }
 
 // =============================================================
-// Hook SSTabBar — 稳定过滤（与您之前验证有效的版本一致）
+// Hook SSTabBar — 稳定过滤
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
-        WriteLog(@"SSTabBar 过滤: 原 %lu → 过滤后 %lu (首页=%@, 我的=%@)", (unsigned long)items.count, (unsigned long)filtered.count, items[0].title, items[4].title);
+        WriteLog(@"SSTabBar 过滤: 原 %lu → 过滤后 %lu (首页=%@, 我的=%@)", (unsigned long)items.count, (unsigned long)filtered.count, [(UITabBarItem *)items[0] title], [(UITabBarItem *)items[4] title]);
         %orig(filtered, animated);
         // 如果默认是我的，立即切换
         if (defaultTabIndex() == 1) {
@@ -142,7 +142,7 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 %end
 
 // =============================================================
-// Hook SSTabBarController — 完全手动切换，不依赖 selectedIndex
+// Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
 
@@ -154,33 +154,23 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     WriteLog(@"tabBar.items 数量: %lu", (unsigned long)tabBar.items.count);
     WriteLog(@"当前 selectedViewController: %@", tab.selectedViewController);
 
-    // 如果功能关闭或未过滤，走原始逻辑
     if (!isEnabled() || tabBar.items.count != 2) {
         WriteLog(@"功能未开启或未过滤，走原始逻辑");
         %orig(selectedIndex);
-        if (isEnabled()) {
-            // 即使未过滤，也尝试同步高亮和颜色（可选）
-            // 但为了保险，只调用 sync，不重复切换
-            // 这里可省略，因为我们只需要过滤模式
-        }
         return;
     }
 
     // ---- 过滤模式：完全手动处理 ----
     NSInteger filteredIndex = -1;
-    // 判断传入索引含义
     if (selectedIndex < 2) {
-        // 过滤索引 0 或 1
         filteredIndex = selectedIndex;
         WriteLog(@"识别为过滤索引: %ld", (long)filteredIndex);
     } else {
-        // 真实索引，映射到过滤索引
         if (selectedIndex == 0) {
             filteredIndex = 0;
         } else if (selectedIndex == 4) {
             filteredIndex = 1;
         } else {
-            // 其他真实索引（剧场等）重定向到首页
             filteredIndex = 0;
             WriteLog(@"其他真实索引 %ld → 重定向到首页", (long)selectedIndex);
         }
@@ -192,7 +182,6 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         filteredIndex = 0;
     }
 
-    // 执行手动切换
     switchToTab(tab, filteredIndex);
     WriteLog(@"===== setSelectedIndex 处理结束 =====");
 }
@@ -200,9 +189,8 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 - (void)viewWillAppear:(BOOL)animated {
     WriteLog(@"viewWillAppear 调用");
     if (isEnabled() && defaultTabIndex() == 1) {
-        WriteLog(@"默认启动是我的，调用 setSelectedIndex:1");
-        // 调用我们自己的 setSelectedIndex，会触发手动切换
-        [self setSelectedIndex:1];
+        WriteLog(@"默认启动是我的，设置 selectedIndex = 1");
+        ((UITabBarController *)self).selectedIndex = 1;
     }
     %orig;
 }
@@ -211,8 +199,8 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            WriteLog(@"viewDidAppear 延迟确保切换到我的");
-            [self setSelectedIndex:1];
+            WriteLog(@"viewDidAppear 延迟确保 selectedIndex = 1");
+            ((UITabBarController *)self).selectedIndex = 1;
         });
     }
 }
