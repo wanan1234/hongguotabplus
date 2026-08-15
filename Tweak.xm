@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的 + 强制刷新 tabBar 外观
-//  基于之前“无声音、无历史记录”的稳定版本，增加 tabBar 刷新逻辑
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（模拟点击标签）
+//  通过模拟点击“我的”标签，强制刷新 TabBar 状态
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -59,10 +59,8 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     }
     %orig(selectedIndex);
 }
-%end
 
-// 3. 在 viewWillAppear 中前置设置 selectedIndex（无声音版本）
-%hook SSTabBarController
+// 3. 在 viewWillAppear 中设置默认页面（无声音版本）
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -70,48 +68,52 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
-            // 强制刷新 tabBar 外观（关键！）
-            UITabBar *tabBar = tab.tabBar;
-            [tabBar setNeedsLayout];
-            [tabBar layoutIfNeeded];
-            [tabBar setNeedsDisplay];
-            // 进一步强制刷新选中状态
-            if (myIndex < tabBar.items.count) {
-                tabBar.selectedItem = tabBar.items[myIndex];
-            }
         }
     }
     %orig;
 }
 
-// 4. 在 viewDidAppear 中兜底并再次刷新
+// 4. 在 viewDidAppear 中模拟点击“我的”标签，强制刷新 TabBar
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
-            tab.selectedIndex = myIndex;
+    if (!isEnabled() || defaultTabIndex() != 1) return;
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UITabBarController *tab = (UITabBarController *)self;
+            NSArray *vcs = tab.viewControllers;
+            NSInteger myIndex = indexOfMyVC(vcs);
+            if (myIndex == -1) return;
+
+            // 模拟点击“我的”标签
+            // 方法1：调用 tabBarController 的 selectedIndex 设置（但可能无效，我们已经做过）
+            // 方法2：直接找到对应的 UITabBarButton 并模拟点击
+            // 方法2更可靠，因为用户手动点击有效
+
             UITabBar *tabBar = tab.tabBar;
+            NSArray *buttons = tabBar.subviews;
+            // 遍历子视图找到 UITabBarButton
+            for (UIView *view in buttons) {
+                if ([NSStringFromClass([view class]) containsString:@"UITabBarButton"]) {
+                    // 获取按钮对应的 item
+                    // 由于没有公开 API，我们通过索引推断
+                    // 假设按钮顺序与 items 一致
+                    NSInteger index = [buttons indexOfObject:view];
+                    if (index == myIndex) {
+                        // 模拟点击
+                        [view sendActionsForControlEvents:UIControlEventTouchUpInside];
+                        break;
+                    }
+                }
+            }
+
+            // 兜底：强制刷新布局
             [tabBar setNeedsLayout];
             [tabBar layoutIfNeeded];
             [tabBar setNeedsDisplay];
-            if (myIndex < tabBar.items.count) {
-                tabBar.selectedItem = tabBar.items[myIndex];
-            }
-        }
-        // 延迟再次刷新，确保完全生效（解决黑块残留）
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UITabBarController *tab = (UITabBarController *)self;
-            if (tab && tab.selectedIndex != 0) {
-                UITabBar *tabBar = tab.tabBar;
-                [tabBar setNeedsLayout];
-                [tabBar layoutIfNeeded];
-                [tabBar setNeedsDisplay];
-            }
         });
-    }
+    });
 }
 %end
 
