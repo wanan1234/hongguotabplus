@@ -1,5 +1,5 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（通过 setViewControllers 过滤）
+//  HongGuoFullScreen — 最终版（Hook setViewControllers）
 //  功能：精简Tab栏（首页、我的）+ 默认启动页 + 双指双击菜单
 //  原理：拦截 setViewControllers:animated:，保留首页和我的
 //  修复：启动时高亮正确，点击切换正常，颜色自动同步
@@ -71,8 +71,8 @@ static void syncTabBarAppearance(UITabBarController *tab) {
             %orig(filtered, animated);
             // 过滤后，根据默认设置选中
             NSInteger targetIndex = (defaultTabIndex() == 1) ? 1 : 0;
-            if (self.selectedIndex != targetIndex) {
-                self.selectedIndex = targetIndex;
+            if (((UITabBarController *)self).selectedIndex != targetIndex) {
+                ((UITabBarController *)self).selectedIndex = targetIndex;
             }
             syncTabBarAppearance((UITabBarController *)self);
             return;
@@ -135,7 +135,7 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 %end
 
 // =============================================================
-// 双指双击菜单（保持不变，完整版）
+// 双指双击菜单（保持不变）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
