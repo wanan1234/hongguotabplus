@@ -1,7 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 最终修复版（颜色 + 隐藏遮挡）
+//  HongGuoFullScreen — 最终修复版（颜色同步，无遮挡）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  日志：记录关键操作到 Documents/HongGuo.log
+//  重点：只设置 barTintColor，不改变 translucent，避免遮挡
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -46,18 +46,14 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
-// 获取当前页面背景色（修复：优先取 view.backgroundColor）
+// 获取当前页面背景色
 static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
     UIViewController *selected = tab.selectedViewController;
     if (!selected) return nil;
-    
-    // 方法1：直接取 view.backgroundColor
     UIColor *color = selected.view.backgroundColor;
     if (color && ![color isEqual:[UIColor clearColor]]) {
         return color;
     }
-    
-    // 方法2：取 view 的 layer 背景色
     CGColorRef layerColor = selected.view.layer.backgroundColor;
     if (layerColor) {
         UIColor *layerColorUI = [UIColor colorWithCGColor:layerColor];
@@ -65,111 +61,37 @@ static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
             return layerColorUI;
         }
     }
-    
-    // 方法3：尝试取 scrollView 背景色
-    if ([selected.view isKindOfClass:[UIScrollView class]]) {
-        UIScrollView *scrollView = (UIScrollView *)selected.view;
-        if (scrollView.backgroundColor) {
-            return scrollView.backgroundColor;
-        }
-    }
-    
-    // 方法4：默认白色（用于我的页面）
+    // 默认白色（用于我的页面）
     return [UIColor whiteColor];
 }
 
-// 强制修正 TabBar 颜色（专门修复黑色问题）
-static void fixTabBarColor(UITabBarController *tab) {
+// 强制设置 TabBar 高亮和颜色
+static void forceFixTabBar(UITabBarController *tab, NSInteger targetFilteredIndex) {
     if (!tab || !isEnabled()) return;
     UITabBar *tabBar = tab.tabBar;
-    UIViewController *selected = tab.selectedViewController;
-    if (!selected) return;
-    
-    // 根据当前页面设置颜色
+    if (tabBar.items.count != 2) return;
+
+    // 1. 强制高亮
+    if (targetFilteredIndex >= 0 && targetFilteredIndex < tabBar.items.count) {
+        UITabBarItem *targetItem = tabBar.items[targetFilteredIndex];
+        if (tabBar.selectedItem != targetItem) {
+            tabBar.selectedItem = targetItem;
+            WriteLog(@"强制设置高亮: %@", targetItem.title);
+        }
+    }
+
+    // 2. 设置 barTintColor（不改变 translucent）
     UIColor *bgColor = getCurrentPageBackgroundColor(tab);
-    WriteLog(@"fixTabBarColor: 当前控制器=%@, 背景色=%@", selected, bgColor);
-    
     if (bgColor) {
-        tabBar.barTintColor = bgColor;
-        tabBar.translucent = NO;
-        // 强制刷新
-        [tabBar setNeedsLayout];
-        [tabBar layoutIfNeeded];
-        WriteLog(@"fixTabBarColor: 已设置 barTintColor=%@", bgColor);
-    }
-}
-
-// 同步 TabBar 高亮和颜色
-static void syncTabBarAppearance(UITabBarController *tab) {
-    if (!tab || !isEnabled()) return;
-    UITabBar *tabBar = tab.tabBar;
-    UIViewController *selected = tab.selectedViewController;
-    if (!selected) return;
-
-    // 高亮匹配
-    NSString *title = selected.tabBarItem.title;
-    for (UITabBarItem *item in tabBar.items) {
-        if ([item.title isEqualToString:title]) {
-            if (tabBar.selectedItem != item) {
-                tabBar.selectedItem = item;
-            }
-            break;
+        if (tabBar.barTintColor != bgColor) {
+            tabBar.barTintColor = bgColor;
+            WriteLog(@"设置 barTintColor: %@", bgColor);
         }
+        // 保持系统默认的 translucent（不设置 NO）
     }
 
-    // 修复颜色
-    fixTabBarColor(tab);
-}
-
-// 隐藏“我的”页面顶部的白色遮挡区域
-static void hideMyPageTopBanner(UIViewController *myVC) {
-    if (!myVC) return;
-    WriteLog(@"hideMyPageTopBanner: 尝试隐藏顶部遮挡");
-    
-    // 方法1：查找高度 318 的 FQReaderSaaSBaseImageView（横幅）
-    for (UIView *sub in myVC.view.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
-            if (sub.frame.size.height > 300) {
-                sub.hidden = YES;
-                WriteLog(@"已隐藏横幅: %@", NSStringFromCGRect(sub.frame));
-            }
-        }
-    }
-    
-    // 方法2：查找滚动视图内的顶部占位视图（高度91）
-    for (UIView *sub in myVC.view.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
-            if ([sub isKindOfClass:[UIScrollView class]]) {
-                UIScrollView *scrollView = (UIScrollView *)sub;
-                for (UIView *contentView in scrollView.subviews) {
-                    if ([NSStringFromClass([contentView class]) isEqualToString:@"SSMyUser637NestedContainerScrollContentView"]) {
-                        if (contentView.subviews.count > 0) {
-                            UIView *firstChild = contentView.subviews[0];
-                            if (firstChild.frame.size.height >= 80 && firstChild.frame.size.height <= 100) {
-                                firstChild.hidden = YES;
-                                WriteLog(@"已隐藏滚动内容顶部占位视图");
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    
-    // 方法3：强制滚动到顶部，消除空白
-    for (UIView *sub in myVC.view.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
-            if ([sub isKindOfClass:[UIScrollView class]]) {
-                UIScrollView *scrollView = (UIScrollView *)sub;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-                    WriteLog(@"已归零滚动视图偏移");
-                });
-                break;
-            }
-        }
-    }
+    [tabBar setNeedsLayout];
+    [tabBar layoutIfNeeded];
 }
 
 // 强制过滤 tabBar.items
@@ -187,8 +109,6 @@ static void forceFilterTabBarItems(UITabBarController *tab) {
             ![tabBar.items[1].title isEqualToString:myItem.title]) {
             WriteLog(@"强制过滤 items: 首页=%@, 我的=%@", homeItem.title, myItem.title);
             [tabBar setItems:@[homeItem, myItem] animated:NO];
-            // 过滤后立即修复颜色
-            fixTabBarColor(tab);
         }
     }
 }
@@ -200,7 +120,6 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     if (vcs.count < 5) return;
     UITabBar *tabBar = tab.tabBar;
 
-    // 确保 items 已过滤
     forceFilterTabBarItems(tab);
 
     NSInteger realIndex = -1;
@@ -221,23 +140,8 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         tab.selectedViewController = targetVC;
     }
 
-    // 修正高亮
-    if (filteredIndex >= 0 && filteredIndex < tabBar.items.count) {
-        UITabBarItem *item = tabBar.items[filteredIndex];
-        if (tabBar.selectedItem != item) {
-            tabBar.selectedItem = item;
-        }
-    }
-
-    // 修复颜色
-    fixTabBarColor(tab);
-    
-    // 如果切换到我的页面，隐藏顶部遮挡
-    if (filteredIndex == 1) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            hideMyPageTopBanner(targetVC);
-        });
-    }
+    // 强制修复高亮和颜色
+    forceFixTabBar(tab, filteredIndex);
 }
 
 // =============================================================
@@ -327,6 +231,11 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
             UITabBarController *tab = (UITabBarController *)self;
             forceFilterTabBarItems(tab);
             switchToTab(tab, 1);
+        });
+        // 再延迟0.5秒执行一次，确保颜色最终一致
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UITabBarController *tab = (UITabBarController *)self;
+            forceFixTabBar(tab, 1);
         });
     }
 }
