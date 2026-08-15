@@ -1,7 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版（保留所有功能+日志）
-//  功能：精简Tab栏（首页、我的）+ 默认启动页 + 双指双击菜单
-//  诊断：记录每次 selectedIndex 变化、视图切换、TabBar 状态
+//  HongGuoFullScreen — 诊断版（完整功能+日志）
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
 //  日志路径：Documents/HongGuo.log
 // =============================================================
 #import <UIKit/UIKit.h>
@@ -36,7 +35,7 @@ static void WriteLog(NSString *format, ...) {
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
-    NSLog(@"[HongGuo] %@", msg); // 也输出到控制台
+    NSLog(@"[HongGuo] %@", msg);
 }
 
 static BOOL isEnabled() {
@@ -47,7 +46,7 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
-// 获取“我的”在原始 viewControllers 中的真实索引（固定为4）
+// 获取“我的”真实索引（固定为4）
 static NSInteger myRealIndex() {
     return 4;
 }
@@ -92,14 +91,16 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 }
 
 // =============================================================
-// Hook SSTabBar — 只过滤 items
+// Hook SSTabBar — 过滤 items
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     WriteLog(@"SSTabBar setItems 被调用，原始 items 数量: %lu", (unsigned long)items.count);
     if (isEnabled() && items.count > 2) {
-        NSArray *filtered = @[items[0], items[4]];
-        WriteLog(@"过滤后 items 数量: %lu (首页: %@, 我的: %@)", (unsigned long)filtered.count, items[0].title, items[4].title);
+        UITabBarItem *homeItem = items[0];
+        UITabBarItem *myItem = items[4];
+        NSArray *filtered = @[homeItem, myItem];
+        WriteLog(@"过滤后 items: 首页=%@, 我的=%@", homeItem.title, myItem.title);
         %orig(filtered, animated);
         // 如果默认是我的，强制切换
         if (defaultTabIndex() == 1) {
@@ -108,9 +109,8 @@ static void syncTabBarAppearance(UITabBarController *tab) {
                 responder = [responder nextResponder];
             }
             if ([responder isKindOfClass:[UITabBarController class]]) {
-                UITabBarController *tab = (UITabBarController *)responder;
                 WriteLog(@"setItems 后强制设置 selectedIndex = 1");
-                tab.selectedIndex = 1;
+                ((UITabBarController *)responder).selectedIndex = 1;
             }
         }
         return;
@@ -120,7 +120,7 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 %end
 
 // =============================================================
-// Hook SSTabBarController — 完全接管切换 + 日志
+// Hook SSTabBarController — 完全接管切换
 // =============================================================
 %hook SSTabBarController
 
@@ -145,7 +145,6 @@ static void syncTabBarAppearance(UITabBarController *tab) {
     NSInteger realIndex = -1;
     NSInteger filteredIndex = -1;
 
-    // 判断传入索引含义
     if (selectedIndex < 2) {
         // 过滤索引
         filteredIndex = selectedIndex;
@@ -167,10 +166,9 @@ static void syncTabBarAppearance(UITabBarController *tab) {
             realIndex = selectedIndex;
             WriteLog(@"识别为真实索引 %ld → 过滤索引 1 (我的)", (long)realIndex);
         } else {
-            // 其他真实索引（剧场等）→ 重定向到首页
             filteredIndex = 0;
             realIndex = 0;
-            WriteLog(@"识别为其他真实索引 %ld → 重定向到首页 (过滤索引 0)", (long)selectedIndex);
+            WriteLog(@"识别为其他真实索引 %ld → 重定向到首页", (long)selectedIndex);
         }
     }
 
@@ -183,7 +181,6 @@ static void syncTabBarAppearance(UITabBarController *tab) {
     UIViewController *targetVC = tab.viewControllers[realIndex];
     WriteLog(@"最终决定切换到真实索引 %ld, 控制器: %@", (long)realIndex, targetVC);
 
-    // 1. 切换视图
     if (tab.selectedViewController != targetVC) {
         tab.selectedViewController = targetVC;
         WriteLog(@"视图已切换");
@@ -191,7 +188,6 @@ static void syncTabBarAppearance(UITabBarController *tab) {
         WriteLog(@"视图未变化");
     }
 
-    // 2. 修正高亮
     if (filteredIndex >= 0 && filteredIndex < tabBar.items.count) {
         UITabBarItem *item = tabBar.items[filteredIndex];
         WriteLog(@"设置高亮 item: %@ (过滤索引 %ld)", item.title, (long)filteredIndex);
@@ -200,13 +196,10 @@ static void syncTabBarAppearance(UITabBarController *tab) {
         }
     }
 
-    // 3. 同步颜色
     syncTabBarAppearance(tab);
-    WriteLog(@"颜色同步完成，barTintColor: %@", tabBar.barTintColor);
     WriteLog(@"===== setSelectedIndex 处理结束 =====");
 }
 
-// viewWillAppear 中设置默认启动页
 - (void)viewWillAppear:(BOOL)animated {
     WriteLog(@"viewWillAppear 调用");
     if (isEnabled() && defaultTabIndex() == 1) {
@@ -216,7 +209,6 @@ static void syncTabBarAppearance(UITabBarController *tab) {
     %orig;
 }
 
-// viewDidAppear 中再次确保
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
