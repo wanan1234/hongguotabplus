@@ -132,8 +132,9 @@ static void WriteLog(NSString *format, ...) {
 
 - (void)viewDidLoad {
     %orig;
-    // 查找并隐藏 SSMyUser637Bar
-    for (UIView *subview in self.view.subviews) {
+    // 强制转换为 UIViewController * 访问 view
+    UIViewController *vc = (UIViewController *)self;
+    for (UIView *subview in vc.view.subviews) {
         if ([NSStringFromClass([subview class]) isEqualToString:@"SSMyUser637Bar"]) {
             WriteLog(@"找到 SSMyUser637Bar，准备隐藏");
             subview.hidden = YES;
@@ -146,7 +147,8 @@ static void WriteLog(NSString *format, ...) {
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
     // 再次确保隐藏（可能被系统重新显示）
-    for (UIView *subview in self.view.subviews) {
+    UIViewController *vc = (UIViewController *)self;
+    for (UIView *subview in vc.view.subviews) {
         if ([NSStringFromClass([subview class]) isEqualToString:@"SSMyUser637Bar"]) {
             subview.hidden = YES;
             subview.alpha = 0.0;
