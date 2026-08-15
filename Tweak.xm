@@ -1,7 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 纯净版 + 索引映射修复
+//  HongGuoFullScreen — 终极版（同时过滤 ViewControllers）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  修复：正确映射索引，让系统处理切换和高亮
+//  修复：完全过滤 ViewControllers 和 TabBar items，彻底解决索引错乱
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -26,26 +26,6 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// 将原始索引映射为过滤后的有效索引（0或1）
-// =============================================================
-static NSInteger mapToFilteredIndex(UITabBarController *tab, NSInteger originalIndex) {
-    if (!isEnabled()) return originalIndex;
-    UITabBar *tabBar = tab.tabBar;
-    // 如果未过滤（items数>2），直接返回原索引
-    if (tabBar.items.count > 2) return originalIndex;
-    
-    NSInteger myIndex = indexOfMyVC(tab.viewControllers);
-    if (myIndex == -1) return 0; // 安全回退
-    
-    // 映射逻辑
-    if (originalIndex == myIndex) return 1; // 我的 -> 过滤索引1
-    if (originalIndex == 0) return 0;       // 首页 -> 过滤索引0
-    // 其他原始索引（如剧场），根据需求重定向
-    // 这里将所有其他索引重定向到首页（索引0），您可以改为重定向到我的
-    return 0;
-}
-
-// =============================================================
 // Hook SSTabBar — 过滤 items，只保留首页和我的
 // =============================================================
 %hook SSTabBar
@@ -53,19 +33,6 @@ static NSInteger mapToFilteredIndex(UITabBarController *tab, NSInteger originalI
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
-        // 如果默认启动是我的，设置选中索引为1（过滤后的索引）
-        if (defaultTabIndex() == 1) {
-            UIResponder *responder = (UIResponder *)self;
-            while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
-                responder = [responder nextResponder];
-            }
-            if ([responder isKindOfClass:[UITabBarController class]]) {
-                UITabBarController *tab = (UITabBarController *)responder;
-                if (tab.selectedIndex != 1) {
-                    tab.selectedIndex = 1; // 注意：这里直接设置索引1，系统会处理
-                }
-            }
-        }
         return;
     }
     %orig(items, animated);
@@ -73,50 +40,89 @@ static NSInteger mapToFilteredIndex(UITabBarController *tab, NSInteger originalI
 %end
 
 // =============================================================
-// Hook SSTabBarController
+// Hook SSTabBarController — 过滤 viewControllers
 // =============================================================
 %hook SSTabBarController
 
-// 核心：拦截 setSelectedIndex，将原始索引映射为过滤索引
-- (void)setSelectedIndex:(NSInteger)selectedIndex {
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        UITabBar *tabBar = tab.tabBar;
-        // 如果已经过滤（只有2个item），进行映射
-        if (tabBar.items.count == 2) {
-            NSInteger filteredIndex = mapToFilteredIndex(tab, selectedIndex);
-            // 调用原始方法，传入映射后的索引
-            %orig(filteredIndex);
+// 关键：拦截 viewControllers 的 setter，保留首页和我的
+- (void)setViewControllers:(NSArray *)viewControllers animated:(BOOL)animated {
+    if (isEnabled() && viewControllers.count > 2) {
+        // 找到首页和我的
+        UIViewController *homeVC = nil;
+        UIViewController *myVC = nil;
+        for (UIViewController *vc in viewControllers) {
+            NSString *title = vc.tabBarItem.title;
+            if ([title isEqualToString:@"首页"]) {
+                homeVC = vc;
+            } else if ([title isEqualToString:@"我的"]) {
+                myVC = vc;
+            }
+        }
+        if (homeVC && myVC) {
+            NSArray *filtered = @[homeVC, myVC];
+            %orig(filtered, animated);
+            // 如果默认启动是我的，设置选中索引为1
+            if (defaultTabIndex() == 1) {
+                if (self.selectedIndex != 1) {
+                    self.selectedIndex = 1;
+                }
+            }
             return;
         }
     }
-    // 未过滤或功能未开启，走原始逻辑
-    %orig(selectedIndex);
+    %orig(viewControllers, animated);
+}
+
+// 拦截 getter，返回过滤后的数组（安全措施）
+- (NSArray *)viewControllers {
+    NSArray *orig = %orig;
+    if (!isEnabled() || orig.count <= 2) return orig;
+    // 返回已过滤的数组（缓存在某个地方？这里简单起见，我们直接返回原始数组，因为 setter 已经过滤了）
+    // 但为了安全，如果 getter 被调用，我们也可以重新过滤
+    // 为了简单，我们直接返回原始，因为 setter 已经替换了。
+    return %orig;
 }
 
 // viewWillAppear 中设置默认启动页
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        // 直接设置过滤索引1
-        if (tab.selectedIndex != 1) {
-            tab.selectedIndex = 1;
+        if (self.selectedIndex != 1) {
+            self.selectedIndex = 1;
         }
     }
     %orig;
 }
 
-// viewDidAppear 中再次确保（防止被重置）
+// viewDidAppear 中再次确保
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (tab.selectedIndex != 1) {
-                tab.selectedIndex = 1;
+            if (self.selectedIndex != 1) {
+                self.selectedIndex = 1;
             }
         });
     }
+}
+
+// 拦截 setSelectedIndex，仅处理“剧场”重定向
+- (void)setSelectedIndex:(NSInteger)selectedIndex {
+    if (isEnabled()) {
+        // 由于 viewControllers 已过滤，selectedIndex 只有0和1有效
+        if (selectedIndex < 0 || selectedIndex >= self.viewControllers.count) {
+            // 无效索引，重定向到首页
+            %orig(0);
+            return;
+        }
+        UIViewController *targetVC = self.viewControllers[selectedIndex];
+        NSString *title = targetVC.tabBarItem.title;
+        if ([title isEqualToString:@"剧场"]) {
+            // 理论上不会有剧场，但以防万一，重定向到首页
+            %orig(0);
+            return;
+        }
+    }
+    %orig(selectedIndex);
 }
 
 %end
