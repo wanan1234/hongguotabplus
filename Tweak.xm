@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（修复黑块 + 跳转错乱）
-//  强制 CYLTabBar.alpha=1，修正 setSelectedIndex 逻辑
+//  HongGuoFullScreen — 最终可编译版
+//  通过 UITabBar 强制 alpha=1，修正跳转错乱
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -25,9 +25,9 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// Hook CYLTabBar（红果实际使用的 TabBar）— 强制 alpha=1
+// Hook UITabBar（红果的 CYLTabBar 是 UITabBar 的子类）
 // =============================================================
-%hook CYLTabBar
+%hook UITabBar
 
 - (void)setAlpha:(CGFloat)alpha {
     if (isEnabled() && alpha == 0.0) {
@@ -47,6 +47,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
+        // 只保留首页和我的（索引0和4）
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
         return;
@@ -56,17 +57,17 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 %end
 
 // =============================================================
-// Hook SSTabBarController
+// Hook SSTabBarController（通过 UITabBarController 转换）
 // =============================================================
 %hook SSTabBarController
 
 - (void)viewDidLoad {
     %orig;
     if (!isEnabled()) return;
-    
-    // 初始化 selectedIndex（防止 NSNotFound）
-    if (self.selectedIndex == NSNotFound || self.selectedIndex >= self.viewControllers.count) {
-        self.selectedIndex = 0;
+    UITabBarController *tab = (UITabBarController *)self;
+    // 初始化 selectedIndex
+    if (tab.selectedIndex == NSNotFound || tab.selectedIndex >= tab.viewControllers.count) {
+        tab.selectedIndex = 0;
     }
 }
 
@@ -85,28 +86,21 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (!isEnabled()) return;
-    
-    // 兜底：确保 alpha=1 且 selectedIndex 正确
     UITabBarController *tab = (UITabBarController *)self;
-    UITabBar *tabBar = tab.tabBar;
-    if (tabBar.alpha == 0.0) {
-        tabBar.alpha = 1.0;
+    if (tab.tabBar.alpha == 0.0) {
+        tab.tabBar.alpha = 1.0;
     }
 }
 
-// 拦截 setSelectedIndex — 修正跳转错乱
+// 拦截 setSelectedIndex 修正跳转
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
         NSArray *vcs = tab.viewControllers;
-        
-        // 越界修正
         if (selectedIndex >= vcs.count) {
             %orig(0);
             return;
         }
-        
-        // 如果选中的是“剧场”，重定向到“我的”
         UIViewController *targetVC = vcs[selectedIndex];
         NSString *title = targetVC.tabBarItem.title;
         if ([title isEqualToString:@"剧场"]) {
