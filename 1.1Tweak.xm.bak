@@ -1,10 +1,10 @@
 // =============================================================
-//  HongGuoFullScreen — 修复黑块（alpha=0 导致）
-//  基于诊断日志发现 tabBar.alpha = 0，强制设置为 1
+//  HongGuoFullScreen — 最终纯净版
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
+//  无日志、无alpha修复
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
-#import <stdarg.h>
 
 static BOOL isEnabled() {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
@@ -25,35 +25,9 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// 日志工具（仅保留关键日志）
-static void WriteLog(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
-    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *documentsDirectory = [paths firstObject];
-    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:documentsDirectory]) {
-        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    NSDateFormatter *df = [[NSDateFormatter alloc] init];
-    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
-    NSString *timestamp = [df stringFromDate:[NSDate date]];
-    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) {
-        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    }
-    NSLog(@"[HongGuo] %@", msg);
-}
-
-// 1. 过滤 SSTabBar 的 items
+// =============================================================
+// Hook SSTabBar — 过滤 items，只保留首页和我的
+// =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
@@ -65,8 +39,12 @@ static void WriteLog(NSString *format, ...) {
 }
 %end
 
-// 2. 拦截 setSelectedIndex，修正跳转错乱
+// =============================================================
+// Hook SSTabBarController
+// =============================================================
 %hook SSTabBarController
+
+// 拦截 setSelectedIndex，修正跳转错乱
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -89,7 +67,7 @@ static void WriteLog(NSString *format, ...) {
     %orig(selectedIndex);
 }
 
-// 3. 在 viewWillAppear 中前置设置 selectedIndex（无声音版本）
+// viewWillAppear 中前置设置 selectedIndex
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -102,27 +80,6 @@ static void WriteLog(NSString *format, ...) {
     %orig;
 }
 
-// 4. 在 viewDidAppear 中强制修正 tabBar.alpha
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (!isEnabled() || defaultTabIndex() != 1) return;
-
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UITabBarController *tab = (UITabBarController *)self;
-            UITabBar *tabBar = tab.tabBar;
-            // 关键修复：将 alpha 设为 1
-            if (tabBar.alpha < 0.5) {
-                WriteLog(@"fix: tabBar.alpha was %.2f, setting to 1.0", tabBar.alpha);
-                tabBar.alpha = 1.0;
-                [tabBar setNeedsLayout];
-                [tabBar layoutIfNeeded];
-            }
-            // 确保背景视图也可见（但 barTintColor 等已经正常）
-        });
-    });
-}
 %end
 
 // =============================================================
@@ -277,5 +234,4 @@ static void showSettingsMenu(UIWindow *window) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    WriteLog(@"HongGuoFullScreen 加载成功，默认打开：%@", defaultTabIndex() == 0 ? @"首页" : @"我的");
 }
