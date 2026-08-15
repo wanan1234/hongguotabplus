@@ -1,7 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 纯净版 + TabBar 颜色自适应修复
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 颜色随页面切换
-//  无日志、无额外诊断
+//  HongGuoFullScreen — 纯净版 + 默认启动页高亮修复
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
+//  修复：启动时TabBar选中项正确高亮，无额外颜色修改
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -26,28 +26,14 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// 获取当前页面背景色（用于 TabBar 背景匹配）
+// 强制刷新 TabBar 选中状态
 // =============================================================
-static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
-    UIViewController *selected = tab.selectedViewController;
-    if (!selected) return [UIColor whiteColor];
-    UIColor *color = selected.view.backgroundColor;
-    if (color) return color;
-    CGColorRef layerColor = selected.view.layer.backgroundColor;
-    if (layerColor) return [UIColor colorWithCGColor:layerColor];
-    return [UIColor whiteColor]; // 默认白色
-}
-
-// =============================================================
-// 修复 TabBar 颜色（背景色跟随当前页面）
-// =============================================================
-static void fixTabBar(UITabBarController *tab) {
+static void refreshTabBarSelection(UITabBarController *tab) {
     if (!tab) return;
     UITabBar *tabBar = tab.tabBar;
-    UIColor *bgColor = getCurrentPageBackgroundColor(tab);
-    if (bgColor) {
-        tabBar.barTintColor = bgColor;
-        tabBar.translucent = NO;
+    NSInteger idx = tab.selectedIndex;
+    if (idx >= 0 && idx < tabBar.items.count) {
+        tabBar.selectedItem = tabBar.items[idx];
         [tabBar setNeedsLayout];
         [tabBar layoutIfNeeded];
     }
@@ -72,7 +58,7 @@ static void fixTabBar(UITabBarController *tab) {
 // =============================================================
 %hook SSTabBarController
 
-// 拦截 setSelectedIndex，修正跳转错乱并修复颜色
+// 拦截 setSelectedIndex，修正跳转错乱，并刷新选中状态
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -84,11 +70,11 @@ static void fixTabBar(UITabBarController *tab) {
                 NSInteger myIndex = indexOfMyVC(vcs);
                 if (myIndex != -1) {
                     %orig(myIndex);
-                    fixTabBar(tab);
+                    refreshTabBarSelection(tab);
                     return;
                 } else {
                     %orig(0);
-                    fixTabBar(tab);
+                    refreshTabBarSelection(tab);
                     return;
                 }
             }
@@ -97,11 +83,11 @@ static void fixTabBar(UITabBarController *tab) {
     %orig(selectedIndex);
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
-        fixTabBar(tab);
+        refreshTabBarSelection(tab);
     }
 }
 
-// viewWillAppear 中设置默认启动页，并立即修复颜色
+// viewWillAppear 中设置默认启动页，并刷新选中状态
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -109,13 +95,13 @@ static void fixTabBar(UITabBarController *tab) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
-            fixTabBar(tab);
+            refreshTabBarSelection(tab);
         }
     }
     %orig;
 }
 
-// viewDidAppear 中再次确保索引正确并修复颜色（防止被重置）
+// viewDidAppear 中再次确保索引正确并刷新（防止被重置）
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
@@ -125,7 +111,7 @@ static void fixTabBar(UITabBarController *tab) {
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
         }
-        fixTabBar(tab);
+        refreshTabBarSelection(tab);
     }
 }
 
