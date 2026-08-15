@@ -1,10 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（代码2 + 索引映射）
+//  HongGuoFullScreen — 最终纯净版
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  颜色：完全由系统自动管理（不设置 barTintColor）
-//  高亮：遍历匹配标题
-//  切换：精准映射 selectedIndex
-//  日志：保留详细日志
+//  无日志、无alpha修复
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -28,91 +25,14 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// 强制切换到“我的”（代码2原始函数）
-static void forceSelectMyTab(UITabBarController *tab) {
-    if (!tab || !isEnabled()) return;
-    NSArray *vcs = tab.viewControllers;
-    NSInteger myIndex = indexOfMyVC(vcs);
-    if (myIndex == -1) return;
-    
-    if (tab.selectedViewController != vcs[myIndex]) {
-        tab.selectedViewController = vcs[myIndex];
-    }
-    
-    UITabBar *tabBar = tab.tabBar;
-    for (UITabBarItem *item in tabBar.items) {
-        if ([item.title isEqualToString:@"我的"]) {
-            if (tabBar.selectedItem != item) {
-                tabBar.selectedItem = item;
-            }
-            break;
-        }
-    }
-    [tabBar setNeedsLayout];
-    [tabBar layoutIfNeeded];
-}
-
-// 强制切换到首页
-static void forceSelectHomeTab(UITabBarController *tab) {
-    if (!tab || !isEnabled()) return;
-    NSArray *vcs = tab.viewControllers;
-    if (vcs.count == 0) return;
-    UIViewController *homeVC = vcs[0];
-    if (tab.selectedViewController != homeVC) {
-        tab.selectedViewController = homeVC;
-    }
-    UITabBar *tabBar = tab.tabBar;
-    for (UITabBarItem *item in tabBar.items) {
-        if ([item.title isEqualToString:@"首页"]) {
-            if (tabBar.selectedItem != item) {
-                tabBar.selectedItem = item;
-            }
-            break;
-        }
-    }
-    [tabBar setNeedsLayout];
-    [tabBar layoutIfNeeded];
-}
-
-// 根据传入的 selectedIndex 映射并切换
-static void handleSelectedIndex(UITabBarController *tab, NSInteger selectedIndex) {
-    if (!tab || !isEnabled()) return;
-    NSArray *vcs = tab.viewControllers;
-    NSInteger myIndex = indexOfMyVC(vcs);
-    if (myIndex == -1) return;
-    
-    // 映射逻辑：点击“我的”时传入 myIndex，点击“首页”传入0，其他重定向到默认页
-    if (selectedIndex == 0) {
-        forceSelectHomeTab(tab);
-    } else if (selectedIndex == myIndex) {
-        forceSelectMyTab(tab);
-    } else {
-        // 其他索引（比如剧场等），根据默认设置重定向
-        if (defaultTabIndex() == 1) {
-            forceSelectMyTab(tab);
-        } else {
-            forceSelectHomeTab(tab);
-        }
-    }
-}
-
 // =============================================================
-// Hook SSTabBar — 过滤 items（完全采用代码2）
+// Hook SSTabBar — 过滤 items，只保留首页和我的
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
-        if (defaultTabIndex() == 1) {
-            UIResponder *responder = (UIResponder *)self;
-            while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
-                responder = [responder nextResponder];
-            }
-            if ([responder isKindOfClass:[UITabBarController class]]) {
-                forceSelectMyTab((UITabBarController *)responder);
-            }
-        }
         return;
     }
     %orig(items, animated);
@@ -120,42 +40,50 @@ static void handleSelectedIndex(UITabBarController *tab, NSInteger selectedIndex
 %end
 
 // =============================================================
-// Hook SSTabBarController — 修改 setSelectedIndex（精准映射）
+// Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
 
+// 拦截 setSelectedIndex，修正跳转错乱
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
-    if (!isEnabled()) {
-        %orig(selectedIndex);
-        return;
+    if (isEnabled()) {
+        UITabBarController *tab = (UITabBarController *)self;
+        NSArray *vcs = tab.viewControllers;
+        if (selectedIndex < vcs.count) {
+            UIViewController *targetVC = vcs[selectedIndex];
+            NSString *title = targetVC.tabBarItem.title;
+            if ([title isEqualToString:@"剧场"]) {
+                NSInteger myIndex = indexOfMyVC(vcs);
+                if (myIndex != -1) {
+                    %orig(myIndex);
+                    return;
+                } else {
+                    %orig(0);
+                    return;
+                }
+            }
+        }
     }
-    UITabBarController *tab = (UITabBarController *)self;
-    handleSelectedIndex(tab, selectedIndex);
-    // 不调用原始方法，完全手动控制
+    %orig(selectedIndex);
 }
 
-// viewWillAppear 中设置默认启动页
+// viewWillAppear 中前置设置 selectedIndex
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
-        forceSelectMyTab((UITabBarController *)self);
+        UITabBarController *tab = (UITabBarController *)self;
+        NSArray *vcs = tab.viewControllers;
+        NSInteger myIndex = indexOfMyVC(vcs);
+        if (myIndex != -1 && tab.selectedIndex != myIndex) {
+            tab.selectedIndex = myIndex;
+        }
     }
     %orig;
-}
-
-// viewDidAppear 中再次确保
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (isEnabled() && defaultTabIndex() == 1) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            forceSelectMyTab((UITabBarController *)self);
-        });
-    }
 }
 
 %end
 
 // =============================================================
-// 双指双击菜单（完整保留）
+// 双指双击菜单
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -170,11 +98,11 @@ static void showToast(NSString *msg, UIWindow *window) {
 static void showDefaultTabMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-
+    
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认打开页面"
                                                                    message:@"选择应用启动时默认进入的页面"
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-
+    
     NSInteger current = defaultTabIndex();
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
@@ -192,7 +120,7 @@ static void showDefaultTabMenu(UIWindow *window) {
         while (top.presentedViewController) top = top.presentedViewController;
         [top presentViewController:restart animated:YES completion:nil];
     }]];
-
+    
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 我的", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
@@ -209,9 +137,9 @@ static void showDefaultTabMenu(UIWindow *window) {
         while (top.presentedViewController) top = top.presentedViewController;
         [top presentViewController:restart animated:YES completion:nil];
     }]];
-
+    
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-
+    
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
         alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
@@ -226,7 +154,7 @@ static void showSettingsMenu(UIWindow *window) {
     BOOL enabled = isEnabled();
     NSInteger defaultTab = defaultTabIndex();
     NSString *defaultText = defaultTab == 0 ? @"首页" : @"我的";
-
+    
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简Tab控制"
                                                                    message:[NSString stringWithFormat:@"当前状态：%@\n默认打开：%@", enabled ? @"已开启" : @"已关闭", defaultText]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
