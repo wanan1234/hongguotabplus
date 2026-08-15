@@ -102,11 +102,12 @@ static void syncTabBarAppearance(UITabBarController *tab) {
             WriteLog(@"过滤后 ViewControllers 数量: 2 (首页=%@, 我的=%@)", homeVC.title, myVC.title);
             %orig(filtered, animated);
             // 过滤后，根据默认设置选中
+            UITabBarController *tab = (UITabBarController *)self;
             NSInteger targetIndex = (defaultTabIndex() == 1) ? 1 : 0;
-            if (self.selectedIndex != targetIndex) {
-                self.selectedIndex = targetIndex;
+            if (tab.selectedIndex != targetIndex) {
+                tab.selectedIndex = targetIndex;
             }
-            syncTabBarAppearance((UITabBarController *)self);
+            syncTabBarAppearance(tab);
             return;
         }
     }
