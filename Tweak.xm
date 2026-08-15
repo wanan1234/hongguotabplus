@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 修复 alpha 黑块
-//  强制 tabBar.alpha = 1，阻止被设为 0
+//  HongGuoFullScreen — 彻底修复 alpha 和背景分割
+//  强制 tabBar.alpha=1，同步 barTintColor
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -25,24 +25,37 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// Hook SSTabBar — 阻止 alpha 被设为 0
+// Hook SSTabBar — 强制 alpha 和背景同步
 // =============================================================
 %hook SSTabBar
+
 - (void)setAlpha:(CGFloat)alpha {
-    // 如果是禁用状态或 alpha 为 0，强制设为 1
     if (isEnabled() && alpha == 0.0) {
-        NSLog(@"[HongGuo] SSTabBar setAlpha:%.2f -> forcing to 1.0", alpha);
+        // 强制设为 1，并同步背景色
+        [self setBarTintColor:[UIColor whiteColor]]; // 根据主界面调整
+        [self setTranslucent:NO];
         %orig(1.0);
         return;
     }
     %orig(alpha);
 }
 
-// 在 setItems 中过滤 items
+- (void)layoutSubviews {
+    %orig;
+    if (isEnabled() && self.alpha == 0.0) {
+        self.alpha = 1.0;
+        [self setBarTintColor:[UIColor whiteColor]];
+        [self setTranslucent:NO];
+    }
+}
+
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
+        // 同步背景色
+        self.barTintColor = [UIColor whiteColor];
+        self.translucent = NO;
         return;
     }
     %orig(items, animated);
@@ -53,7 +66,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 // Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
-// 拦截 setSelectedIndex 修正跳转错乱
+
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -76,7 +89,6 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// viewWillAppear 中设置默认页面
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -84,32 +96,36 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
-            // 同时确保 alpha=1
+            // 同步背景色
+            tab.tabBar.barTintColor = [UIColor whiteColor];
+            tab.tabBar.translucent = NO;
             tab.tabBar.alpha = 1.0;
         }
     }
     %orig;
 }
 
-// viewDidAppear 中兜底
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (!isEnabled()) return;
 
     UITabBarController *tab = (UITabBarController *)self;
     UITabBar *tabBar = tab.tabBar;
-    // 确保 alpha 为 1
+    // 兜底：强制 alpha 和背景
     if (tabBar.alpha != 1.0) {
         tabBar.alpha = 1.0;
     }
-    // 强制刷新布局
+    if (tabBar.barTintColor == nil) {
+        tabBar.barTintColor = [UIColor whiteColor];
+    }
+    tabBar.translucent = NO;
     [tabBar setNeedsLayout];
     [tabBar layoutIfNeeded];
 }
 %end
 
 // =============================================================
-// 双指双击菜单（包含切换默认启动页并询问重启）
+// 双指双击菜单（包含重启询问）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -133,7 +149,6 @@ static void showDefaultTabMenu(UIWindow *window) {
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
-        // 询问重启
         UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
                                                                          message:@"设置已保存，需要重启应用才能生效，是否立即重启？"
                                                                   preferredStyle:UIAlertControllerStyleAlert];
