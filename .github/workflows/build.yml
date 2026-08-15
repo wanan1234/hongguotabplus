@@ -3,11 +3,13 @@ name: Build HongGuo Tweak
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+    paths:
+      - 'Tweak.xm'          # 只有 Tweak.xm 变更时才自动构建
+  workflow_dispatch:        # 手动触发（不限文件）
 
 jobs:
   build:
-    runs-on: macos-latest  # 使用 macOS 环境更稳定
+    runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
