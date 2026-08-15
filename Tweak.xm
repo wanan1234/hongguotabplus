@@ -53,7 +53,7 @@ static void logTabBarState(UITabBar *tabBar, NSString *tag) {
     WriteLog(@"  translucent: %d", tabBar.translucent);
     WriteLog(@"  backgroundImage: %@", tabBar.backgroundImage ? @"exists" : @"nil");
     WriteLog(@"  shadowImage: %@", tabBar.shadowImage ? @"exists" : @"nil");
-    WriteLog(@"  backgroundColor: %@", [tabBar.backgroundColor description] ?: @"nil");
+    WriteLog(@"  backgroundColor: %@", tabBar.backgroundColor ? [tabBar.backgroundColor description] : @"nil");
     
     WriteLog(@"  layer.backgroundColor: %@", tabBar.layer.backgroundColor ? [UIColor colorWithCGColor:tabBar.layer.backgroundColor] : @"nil");
     WriteLog(@"  layer.opacity: %.3f", tabBar.layer.opacity);
@@ -65,7 +65,10 @@ static void logTabBarState(UITabBar *tabBar, NSString *tag) {
         WriteLog(@"    frame: %@", NSStringFromCGRect([backgroundView frame]));
         WriteLog(@"    alpha: %.3f", [backgroundView alpha]);
         WriteLog(@"    hidden: %d", [backgroundView isHidden]);
-        WriteLog(@"    backgroundColor: %@", [[backgroundView backgroundColor] description] ?: @"nil");
+        
+        UIColor *bgColor = [backgroundView backgroundColor];
+        WriteLog(@"    backgroundColor: %@", bgColor ? [bgColor description] : @"nil");
+        
         WriteLog(@"    layer.backgroundColor: %@", [backgroundView layer].backgroundColor ? [UIColor colorWithCGColor:[backgroundView layer].backgroundColor] : @"nil");
         WriteLog(@"    layer.opacity: %.3f", [backgroundView layer].opacity);
         if ([backgroundView isKindOfClass:[UIVisualEffectView class]]) {
@@ -100,7 +103,6 @@ static void logControllerState(UITabBarController *tab, NSString *tag) {
 %hook CYLTabBar
 
 - (void)setAlpha:(CGFloat)alpha {
-    // 通过 objc_msgSend 获取当前 alpha
     CGFloat oldAlpha = ((CGFloat (*)(id, SEL))objc_msgSend)(self, @selector(alpha));
     WriteLog(@"[CYLTabBar setAlpha] %.3f -> %.3f", oldAlpha, alpha);
     %orig(alpha);
