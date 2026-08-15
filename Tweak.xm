@@ -150,8 +150,8 @@ static NSInteger myRealIndex() {
 // viewWillAppear 中设置默认启动页
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
-        // 传入过滤索引1，拦截器会映射为真实索引4
-        [self setSelectedIndex:1];
+        // 使用 performSelector 或强制转换避免编译错误
+        [(id)self setSelectedIndex:1];
     }
     %orig;
 }
@@ -161,7 +161,7 @@ static NSInteger myRealIndex() {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self setSelectedIndex:1];
+            [(id)self setSelectedIndex:1];
         });
     }
 }
