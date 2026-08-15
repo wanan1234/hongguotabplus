@@ -1,7 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（自动重新过滤 + 完整菜单）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  原理：拦截 setItems 过滤，并在切换时检测 items 数量，自动修复
+//  HongGuoFullScreen — 最终版（直接替换 ViewControllers）
+//  功能：精简Tab栏（首页、我的）+ 默认启动页 + 双指双击菜单
+//  原理：拦截 setViewControllers:animated:，只保留首页和我的
 //  日志：记录关键操作到 Documents/HongGuo.log
 // =============================================================
 #import <UIKit/UIKit.h>
@@ -58,66 +58,28 @@ static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
     return nil;
 }
 
-// 手动切换视图并同步高亮和颜色
-static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
+// 同步 TabBar 高亮和颜色
+static void syncTabBarAppearance(UITabBarController *tab) {
     if (!tab || !isEnabled()) return;
-    NSArray *vcs = tab.viewControllers;
-    if (vcs.count < 5) return;
     UITabBar *tabBar = tab.tabBar;
-    if (tabBar.items.count != 2) {
-        WriteLog(@"⚠️ tabBar.items 数量不是2，当前: %lu，尝试重新过滤", (unsigned long)tabBar.items.count);
-        // 主动过滤 items
-        UIViewController *homeVC = (UIViewController *)vcs[0];
-        UIViewController *myVC = (UIViewController *)vcs[4];
-        UITabBarItem *homeItem = homeVC.tabBarItem;
-        UITabBarItem *myItem = myVC.tabBarItem;
-        if (homeItem && myItem) {
-            [tabBar setItems:@[homeItem, myItem] animated:NO];
-            WriteLog(@"已重新过滤 items");
+    UIViewController *selected = tab.selectedViewController;
+    if (!selected) return;
+
+    // 高亮匹配（此时 items 数量应为 2）
+    NSString *title = selected.tabBarItem.title;
+    for (UITabBarItem *item in tabBar.items) {
+        if ([item.title isEqualToString:title]) {
+            if (tabBar.selectedItem != item) {
+                tabBar.selectedItem = item;
+            }
+            break;
         }
-        // 延迟再次调用自己，等待 items 更新
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            switchToTab(tab, filteredIndex);
-        });
-        return;
-    }
-
-    NSInteger realIndex = -1;
-    UITabBarItem *targetItem = nil;
-    if (filteredIndex == 0) {
-        realIndex = 0;
-        if (tabBar.items.count > 0) targetItem = tabBar.items[0];
-    } else if (filteredIndex == 1) {
-        realIndex = 4;
-        if (tabBar.items.count > 1) targetItem = tabBar.items[1];
-    } else {
-        WriteLog(@"⚠️ 无效的过滤索引: %ld", (long)filteredIndex);
-        return;
-    }
-
-    if (realIndex < 0 || realIndex >= vcs.count) {
-        WriteLog(@"⚠️ 真实索引无效: %ld", (long)realIndex);
-        return;
-    }
-
-    UIViewController *targetVC = (UIViewController *)vcs[realIndex];
-    WriteLog(@"手动切换: 过滤索引 %ld → 真实索引 %ld, 控制器: %@", (long)filteredIndex, (long)realIndex, targetVC);
-
-    if (tab.selectedViewController != targetVC) {
-        tab.selectedViewController = targetVC;
-        WriteLog(@"视图已切换");
-    }
-
-    if (targetItem && tabBar.selectedItem != targetItem) {
-        tabBar.selectedItem = targetItem;
-        WriteLog(@"高亮已修正: %@", targetItem.title);
     }
 
     UIColor *bgColor = getCurrentPageBackgroundColor(tab);
     if (bgColor) {
         tabBar.barTintColor = bgColor;
         tabBar.translucent = NO;
-        WriteLog(@"颜色已同步: %@", bgColor);
     }
 
     [tabBar setNeedsLayout];
@@ -125,110 +87,90 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 }
 
 // =============================================================
-// Hook SSTabBar — 过滤 items
-// =============================================================
-%hook SSTabBar
-- (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    if (isEnabled() && items.count > 2) {
-        UITabBarItem *homeItem = items[0];
-        UITabBarItem *myItem = items[4];
-        NSArray *filtered = @[homeItem, myItem];
-        WriteLog(@"SSTabBar 过滤: 原 %lu → 过滤后 %lu (首页=%@, 我的=%@)", (unsigned long)items.count, (unsigned long)filtered.count, homeItem.title, myItem.title);
-        %orig(filtered, animated);
-        // 如果默认是我的，立即切换
-        if (defaultTabIndex() == 1) {
-            UIResponder *responder = (UIResponder *)self;
-            while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
-                responder = [responder nextResponder];
-            }
-            if ([responder isKindOfClass:[UITabBarController class]]) {
-                UITabBarController *tab = (UITabBarController *)responder;
-                WriteLog(@"setItems 后切换到我的");
-                // 延迟执行，确保 items 已更新
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    switchToTab(tab, 1);
-                });
-            }
-        }
-        return;
-    }
-    %orig(items, animated);
-}
-%end
-
-// =============================================================
-// Hook SSTabBarController — 拦截切换
+// Hook SSTabBarController — 核心：拦截 setViewControllers
 // =============================================================
 %hook SSTabBarController
 
-- (void)setSelectedIndex:(NSInteger)selectedIndex {
-    UITabBarController *tab = (UITabBarController *)self;
-    WriteLog(@"===== setSelectedIndex 被调用，传入: %ld =====", (long)selectedIndex);
-    WriteLog(@"tabBar.items 数量: %lu", (unsigned long)tab.tabBar.items.count);
-
-    if (!isEnabled()) {
-        WriteLog(@"功能关闭，走原始逻辑");
-        %orig(selectedIndex);
-        return;
-    }
-
-    // 如果 items 数量不是 2，主动过滤并延迟重试
-    if (tab.tabBar.items.count != 2) {
-        WriteLog(@"items 数量不是2，尝试重新过滤");
-        NSArray *vcs = tab.viewControllers;
-        if (vcs.count >= 5) {
-            UIViewController *homeVC = (UIViewController *)vcs[0];
-            UIViewController *myVC = (UIViewController *)vcs[4];
-            UITabBarItem *homeItem = homeVC.tabBarItem;
-            UITabBarItem *myItem = myVC.tabBarItem;
-            if (homeItem && myItem) {
-                [tab.tabBar setItems:@[homeItem, myItem] animated:NO];
-                WriteLog(@"已重新设置 items");
-                // 延迟再次调用自己
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    WriteLog(@"延迟重试 setSelectedIndex:%ld", (long)selectedIndex);
-                    [(id)self setSelectedIndex:selectedIndex];
-                });
-                return;
+// 拦截所有设置 ViewControllers 的调用，只保留首页和我的
+- (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers animated:(BOOL)animated {
+    WriteLog(@"===== setViewControllers 被调用，原数量: %lu =====", (unsigned long)viewControllers.count);
+    if (isEnabled() && viewControllers.count >= 5) {
+        UIViewController *homeVC = viewControllers[0];
+        UIViewController *myVC = viewControllers[4];
+        if (homeVC && myVC) {
+            NSArray *filtered = @[homeVC, myVC];
+            WriteLog(@"过滤后 ViewControllers 数量: 2 (首页=%@, 我的=%@)", homeVC.title, myVC.title);
+            %orig(filtered, animated);
+            // 过滤后，根据默认设置选中
+            NSInteger targetIndex = (defaultTabIndex() == 1) ? 1 : 0;
+            if (self.selectedIndex != targetIndex) {
+                self.selectedIndex = targetIndex;
             }
+            syncTabBarAppearance((UITabBarController *)self);
+            return;
         }
     }
-
-    // 此时 items 应该是 2，进行手动切换
-    NSInteger filteredIndex = -1;
-    if (selectedIndex < 2) {
-        filteredIndex = selectedIndex;
-    } else {
-        if (selectedIndex == 0) filteredIndex = 0;
-        else if (selectedIndex == 4) filteredIndex = 1;
-        else filteredIndex = 0;
-        WriteLog(@"真实索引 %ld → 映射为过滤索引 %ld", (long)selectedIndex, (long)filteredIndex);
+    %orig(viewControllers, animated);
+    if (isEnabled()) {
+        syncTabBarAppearance((UITabBarController *)self);
     }
-
-    if (filteredIndex < 0 || filteredIndex > 1) {
-        filteredIndex = 0;
-        WriteLog(@"过滤索引无效，回退到0");
-    }
-
-    switchToTab(tab, filteredIndex);
-    WriteLog(@"===== setSelectedIndex 处理结束 =====");
 }
 
+// 在 viewDidLoad 中，如果 viewControllers 未被过滤，主动过滤一次
+- (void)viewDidLoad {
+    %orig;
+    WriteLog(@"viewDidLoad 调用");
+    if (!isEnabled()) return;
+    UITabBarController *tab = (UITabBarController *)self;
+    if (tab.viewControllers.count > 2) {
+        // 主动调用 setViewControllers 过滤
+        [self setViewControllers:tab.viewControllers animated:NO];
+    }
+}
+
+// 拦截 setSelectedIndex（此时索引已经是 0 或 1，只需同步外观）
+- (void)setSelectedIndex:(NSInteger)selectedIndex {
+    WriteLog(@"setSelectedIndex 被调用，传入: %ld", (long)selectedIndex);
+    UITabBarController *tab = (UITabBarController *)self;
+    if (isEnabled() && tab.viewControllers.count == 2) {
+        // 确保索引合法
+        if (selectedIndex < 0 || selectedIndex >= tab.viewControllers.count) {
+            selectedIndex = (defaultTabIndex() == 1) ? 1 : 0;
+            WriteLog(@"索引非法，修正为 %ld", (long)selectedIndex);
+        }
+        %orig(selectedIndex);
+        syncTabBarAppearance(tab);
+        return;
+    }
+    %orig(selectedIndex);
+    if (isEnabled()) {
+        syncTabBarAppearance(tab);
+    }
+}
+
+// viewWillAppear 中确保默认页
 - (void)viewWillAppear:(BOOL)animated {
     WriteLog(@"viewWillAppear 调用");
     if (isEnabled() && defaultTabIndex() == 1) {
-        WriteLog(@"默认启动是我的，调用 setSelectedIndex:1");
-        [(id)self setSelectedIndex:1];
+        UITabBarController *tab = (UITabBarController *)self;
+        if (tab.selectedIndex != 1) {
+            WriteLog(@"设置 selectedIndex = 1");
+            tab.selectedIndex = 1;
+        }
     }
     %orig;
 }
 
+// viewDidAppear 中再次确保
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            WriteLog(@"viewDidAppear 延迟确保切换到我的");
-            [(id)self setSelectedIndex:1];
+            UITabBarController *tab = (UITabBarController *)self;
+            if (tab.selectedIndex != 1) {
+                WriteLog(@"viewDidAppear 延迟设置 selectedIndex = 1");
+                tab.selectedIndex = 1;
+            }
         });
     }
 }
