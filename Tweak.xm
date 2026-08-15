@@ -1,5 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（强制刷新高亮）
+//  HongGuoFullScreen — 交换顺序实现默认打开我的
+//  稳定版，不依赖延迟设置，直接交换索引0和1
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -23,20 +24,60 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// 1. 过滤 SSTabBar 的 items
-%hook SSTabBar
-- (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    if (isEnabled() && items.count > 2) {
-        NSArray *filtered = @[items[0], items[4]];
-        %orig(filtered, animated);
-        return;
-    }
-    %orig(items, animated);
-}
-%end
-
-// 2. 拦截 setSelectedIndex，修正跳转错乱
+// =============================================================
+// Hook SSTabBarController - 在 viewDidLoad 中过滤并交换顺序
+// =============================================================
 %hook SSTabBarController
+
+- (void)viewDidLoad {
+    %orig;
+    if (!isEnabled()) return;
+
+    UITabBarController *tab = (UITabBarController *)self;
+    NSArray *vcs = tab.viewControllers;
+    if (vcs.count < 5) return;
+
+    UIViewController *homeVC = vcs[0];
+    UIViewController *myVC = vcs[4];
+    NSInteger myIdx = indexOfMyVC(vcs); // 实际上就是4
+
+    // 根据默认设置决定顺序
+    NSArray *filteredVCs;
+    NSArray *filteredItems;
+
+    if (defaultTabIndex() == 1) {
+        // 我的放在索引0
+        filteredVCs = @[myVC, homeVC];
+        // 获取 items
+        NSArray *items = tab.tabBar.items;
+        if (items.count >= 5) {
+            filteredItems = @[items[4], items[0]];
+        } else {
+            // 如果 items 不够，从 viewControllers 获取
+            filteredItems = @[myVC.tabBarItem, homeVC.tabBarItem];
+        }
+    } else {
+        // 默认首页
+        filteredVCs = @[homeVC, myVC];
+        NSArray *items = tab.tabBar.items;
+        if (items.count >= 5) {
+            filteredItems = @[items[0], items[4]];
+        } else {
+            filteredItems = @[homeVC.tabBarItem, myVC.tabBarItem];
+        }
+    }
+
+    // 设置新的 viewControllers
+    [tab setViewControllers:filteredVCs animated:NO];
+    // 设置 items
+    [tab.tabBar setItems:filteredItems animated:NO];
+    [tab.tabBar setNeedsLayout];
+    [tab.tabBar layoutIfNeeded];
+    // 选中索引0（即首页或我的）
+    tab.selectedIndex = 0;
+}
+
+// 拦截 setSelectedIndex，防止跳转到无效页面
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -44,62 +85,19 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         if (selectedIndex < vcs.count) {
             UIViewController *targetVC = vcs[selectedIndex];
             NSString *title = targetVC.tabBarItem.title;
-            if ([title isEqualToString:@"剧场"]) {
-                NSInteger myIndex = indexOfMyVC(vcs);
-                if (myIndex != -1) {
-                    %orig(myIndex);
-                    return;
-                } else {
-                    %orig(0);
-                    return;
-                }
+            // 如果试图选中剧场（已被过滤），重定向到0
+            if ([title isEqualToString:@"剧场"] || [title isEqualToString:@"商城"] || [title isEqualToString:@"福利"]) {
+                %orig(0);
+                return;
             }
+        } else {
+            // 越界重置
+            %orig(0);
+            return;
         }
     }
     %orig(selectedIndex);
 }
-%end
-
-// 3. 在 SSRootViewController 的 viewDidAppear 中强制设置
-%hook SSRootViewController
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (!isEnabled() || defaultTabIndex() != 1) return;
-
-    // 查找 SSTabBarController
-    UITabBarController *tabController = nil;
-    for (UIViewController *child in self.childViewControllers) {
-        if ([child isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
-            tabController = (UITabBarController *)child;
-            break;
-        }
-    }
-    if (!tabController) return;
-
-    NSArray *vcs = tabController.viewControllers;
-    NSInteger myIndex = indexOfMyVC(vcs);
-    if (myIndex == -1) return;
-
-    // 强制设置 selectedIndex 和 selectedItem
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // 使用 KVC 绕过可能的拦截
-        [tabController setValue:@(myIndex) forKey:@"selectedIndex"];
-        // 同步 tabBar 高亮
-        NSArray *items = tabController.tabBar.items;
-        if (myIndex < items.count) {
-            [tabController.tabBar setSelectedItem:items[myIndex]];
-        }
-        // 强制刷新布局
-        [tabController.tabBar setNeedsLayout];
-        [tabController.tabBar layoutIfNeeded];
-        // 再次确认
-        if (tabController.selectedIndex != myIndex) {
-            tabController.selectedIndex = myIndex;
-        }
-    });
-}
-
 %end
 
 // =============================================================
