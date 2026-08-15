@@ -66,19 +66,17 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 - (void)viewDidLoad {
     %orig;
     if (isEnabled()) {
-        // 延迟一小段时间，确保视图加载完成
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             NSInteger defaultIndex = defaultTabIndex();
-            // 如果默认是“我的”，且能找到“我的”控制器，则跳转
+            UITabBarController *tab = (UITabBarController *)self;
+            NSArray *vcs = tab.viewControllers;
             if (defaultIndex == 1) {
-                NSArray *vcs = self.viewControllers;
                 NSInteger myIndex = indexOfMyVC(vcs);
                 if (myIndex != -1) {
-                    self.selectedIndex = myIndex;
+                    tab.selectedIndex = myIndex;
                 }
             } else {
-                // 默认首页
-                self.selectedIndex = 0;
+                tab.selectedIndex = 0;
             }
         });
     }
@@ -86,7 +84,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 %end
 
 // =============================================================
-// 双指双击菜单（增加默认页面设置）
+// 双指双击菜单
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -98,7 +96,6 @@ static void showToast(NSString *msg, UIWindow *window) {
     });
 }
 
-// 显示默认页面选择子菜单
 static void showDefaultTabMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
@@ -167,7 +164,6 @@ static void showSettingsMenu(UIWindow *window) {
         [top presentViewController:confirm animated:YES completion:nil];
     }]];
 
-    // 默认页面设置
     [alert addAction:[UIAlertAction actionWithTitle:@"设置默认打开页面" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         showDefaultTabMenu(window);
     }]];
