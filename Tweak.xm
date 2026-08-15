@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（最小改动修复高亮）
-//  基于无声音版本，只在 viewDidAppear 中强制同步高亮
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的 + 强制刷新 tabBar 外观
+//  基于之前“无声音、无历史记录”的稳定版本，增加 tabBar 刷新逻辑
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -59,8 +59,10 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     }
     %orig(selectedIndex);
 }
+%end
 
 // 3. 在 viewWillAppear 中前置设置 selectedIndex（无声音版本）
+%hook SSTabBarController
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -68,37 +70,53 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
+            // 强制刷新 tabBar 外观（关键！）
+            UITabBar *tabBar = tab.tabBar;
+            [tabBar setNeedsLayout];
+            [tabBar layoutIfNeeded];
+            [tabBar setNeedsDisplay];
+            // 进一步强制刷新选中状态
+            if (myIndex < tabBar.items.count) {
+                tabBar.selectedItem = tabBar.items[myIndex];
+            }
         }
     }
     %orig;
 }
 
-// 4. 在 viewDidAppear 中强制刷新高亮和布局
+// 4. 在 viewDidAppear 中兜底并再次刷新
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
         NSArray *vcs = tab.viewControllers;
         NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1) {
-            // 重新设置 selectedIndex 并刷新 tabBar
-            dispatch_async(dispatch_get_main_queue(), ^{
-                tab.selectedIndex = myIndex;
-                // 强制刷新 tabBar 高亮
-                NSArray *items = tab.tabBar.items;
-                if (myIndex < items.count) {
-                    [tab.tabBar setSelectedItem:items[myIndex]];
-                }
-                [tab.tabBar setNeedsLayout];
-                [tab.tabBar layoutIfNeeded];
-            });
+        if (myIndex != -1 && tab.selectedIndex != myIndex) {
+            tab.selectedIndex = myIndex;
+            UITabBar *tabBar = tab.tabBar;
+            [tabBar setNeedsLayout];
+            [tabBar layoutIfNeeded];
+            [tabBar setNeedsDisplay];
+            if (myIndex < tabBar.items.count) {
+                tabBar.selectedItem = tabBar.items[myIndex];
+            }
         }
+        // 延迟再次刷新，确保完全生效（解决黑块残留）
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UITabBarController *tab = (UITabBarController *)self;
+            if (tab && tab.selectedIndex != 0) {
+                UITabBar *tabBar = tab.tabBar;
+                [tabBar setNeedsLayout];
+                [tabBar layoutIfNeeded];
+                [tabBar setNeedsDisplay];
+            }
+        });
     }
 }
 %end
 
 // =============================================================
-// 双指双击菜单（与之前相同）
+// 双指双击菜单（与之前完全相同）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
