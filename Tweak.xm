@@ -26,15 +26,15 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// 强制同步TabBar高亮到当前选中的ViewController
+// 同步TabBar高亮到当前选中的ViewController
 // =============================================================
 static void syncTabBarHighlight(UITabBarController *tab) {
     if (!tab || !isEnabled()) return;
     UITabBar *tabBar = tab.tabBar;
     UIViewController *selectedVC = tab.selectedViewController;
     if (!selectedVC) return;
+    
     NSString *title = selectedVC.tabBarItem.title;
-    // 在过滤后的items中找到相同标题的item
     for (UITabBarItem *item in tabBar.items) {
         if ([item.title isEqualToString:title]) {
             if (tabBar.selectedItem != item) {
@@ -90,7 +90,7 @@ static void forceSelectMyTab(UITabBarController *tab) {
 // =============================================================
 %hook SSTabBarController
 
-// 拦截 setSelectedIndex，只处理“剧场”重定向，其他情况正常执行并同步高亮
+// 拦截 setSelectedIndex，只处理“剧场”重定向
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     UITabBarController *tab = (UITabBarController *)self;
     NSArray *vcs = tab.viewControllers;
@@ -114,7 +114,6 @@ static void forceSelectMyTab(UITabBarController *tab) {
     }
     if (!handled) {
         %orig(selectedIndex);
-        // 切换后同步高亮
         if (isEnabled()) {
             syncTabBarHighlight(tab);
         }
