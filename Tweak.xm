@@ -1,13 +1,31 @@
 // =============================================================
-//  HongGuoFullScreen — 纯净版 + 诊断（记录“我的”页面视图层级）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  诊断：在“我的”页面出现时打印视图层级
+//  HongGuoFullScreen — 隐藏“我的”页面顶部 Bar
+//  基于稳定版，增加隐藏 SSMyUser637Bar
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <stdarg.h>
 
-// ---------- 日志工具 ----------
+static BOOL isEnabled() {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
+}
+
+static NSInteger defaultTabIndex() {
+    return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
+}
+
+static NSInteger indexOfMyVC(NSArray *vcs) {
+    for (NSInteger i = 0; i < vcs.count; i++) {
+        UIViewController *vc = vcs[i];
+        NSString *title = vc.tabBarItem.title;
+        if ([title isEqualToString:@"我的"]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// ---------- 诊断日志 ----------
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -35,75 +53,9 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo] %@", msg);
 }
 
-// ---------- 诊断：递归打印视图层级 ----------
-static void dumpViewHierarchy(UIView *view, NSInteger depth, NSMutableString *output) {
-    if (!view) return;
-    NSMutableString *indent = [NSMutableString string];
-    for (NSInteger i = 0; i < depth; i++) [indent appendString:@"  "];
-    
-    NSString *className = NSStringFromClass([view class]);
-    NSString *frame = NSStringFromCGRect(view.frame);
-    NSString *hidden = view.hidden ? @"YES" : @"NO";
-    NSString *alpha = [NSString stringWithFormat:@"%.2f", view.alpha];
-    NSString *tag = [NSString stringWithFormat:@"%ld", (long)view.tag];
-    NSString *a11y = view.accessibilityLabel ?: @"(无)";
-    
-    [output appendFormat:@"%@[%@] frame=%@ hidden=%@ alpha=%@ tag=%@ a11y=%@\n",
-     indent, className, frame, hidden, alpha, tag, a11y];
-    
-    if ([view isKindOfClass:[UILabel class]]) {
-        UILabel *label = (UILabel *)view;
-        [output appendFormat:@"%@  TEXT: \"%@\"\n", indent, label.text ?: @"(空)"];
-    }
-    if ([view isKindOfClass:[UIButton class]]) {
-        UIButton *btn = (UIButton *)view;
-        [output appendFormat:@"%@  BUTTON title: \"%@\"\n", indent, [btn titleForState:UIControlStateNormal] ?: @"(无)"];
-    }
-    if ([view isKindOfClass:[UIImageView class]]) {
-        UIImageView *iv = (UIImageView *)view;
-        [output appendFormat:@"%@  IMAGE: %@\n", indent, iv.image ? @"存在" : @"(无)"];
-    }
-    
-    for (UIView *sub in view.subviews) {
-        dumpViewHierarchy(sub, depth + 1, output);
-    }
-}
-
-// ---------- 诊断“我的”页面 ----------
-static void diagnoseMyPage(UIViewController *vc) {
-    if (!vc) return;
-    NSMutableString *output = [NSMutableString string];
-    [output appendFormat:@"\n===== 诊断“我的”页面视图层级 =====\n"];
-    [output appendFormat:@"控制器类: %@\n", NSStringFromClass([vc class])];
-    [output appendFormat:@"view frame: %@\n", NSStringFromCGRect(vc.view.frame)];
-    dumpViewHierarchy(vc.view, 0, output);
-    [output appendString:@"===== 诊断结束 =====\n"];
-    WriteLog(@"%@", output);
-}
-
 // =============================================================
-// 原有功能：精简Tab栏
+// 原有功能：过滤 SSTabBar 的 items
 // =============================================================
-static BOOL isEnabled() {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
-}
-
-static NSInteger defaultTabIndex() {
-    return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
-}
-
-static NSInteger indexOfMyVC(NSArray *vcs) {
-    for (NSInteger i = 0; i < vcs.count; i++) {
-        UIViewController *vc = vcs[i];
-        NSString *title = vc.tabBarItem.title;
-        if ([title isEqualToString:@"我的"]) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-// Hook SSTabBar — 过滤 items，只保留首页和我的
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
@@ -115,10 +67,10 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 %end
 
-// Hook SSTabBarController
+// =============================================================
+// 原有功能：拦截 setSelectedIndex，修正跳转错乱
+// =============================================================
 %hook SSTabBarController
-
-// 拦截 setSelectedIndex，修正跳转错乱
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -141,7 +93,6 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// viewWillAppear 中前置设置 selectedIndex
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -154,26 +105,60 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig;
 }
 
-%end
-
-// =============================================================
-// 诊断：Hook SSMyUser637ViewController 的 viewDidAppear
-// =============================================================
-%hook SSMyUser637ViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    if (!isEnabled() || defaultTabIndex() != 1) return;
+
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            // 强制转换为 UIViewController * 避免编译错误
-            diagnoseMyPage((UIViewController *)self);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UITabBarController *tab = (UITabBarController *)self;
+            UITabBar *tabBar = tab.tabBar;
+            if (tabBar.alpha < 0.5) {
+                WriteLog(@"fix: tabBar.alpha was %.2f, setting to 1.0", tabBar.alpha);
+                tabBar.alpha = 1.0;
+                [tabBar setNeedsLayout];
+                [tabBar layoutIfNeeded];
+            }
         });
     });
 }
 %end
 
 // =============================================================
-// 双指双击菜单
+// 新增：隐藏“我的”页面顶部的 SSMyUser637Bar
+// =============================================================
+%hook SSMyUser637ViewController
+
+- (void)viewDidLoad {
+    %orig;
+    // 查找并隐藏 SSMyUser637Bar
+    for (UIView *subview in self.view.subviews) {
+        if ([NSStringFromClass([subview class]) isEqualToString:@"SSMyUser637Bar"]) {
+            WriteLog(@"找到 SSMyUser637Bar，准备隐藏");
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+            break;
+        }
+    }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    // 再次确保隐藏（可能被系统重新显示）
+    for (UIView *subview in self.view.subviews) {
+        if ([NSStringFromClass([subview class]) isEqualToString:@"SSMyUser637Bar"]) {
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+            break;
+        }
+    }
+}
+
+%end
+
+// =============================================================
+// 双指双击菜单（完整保留）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -324,4 +309,5 @@ static void showSettingsMenu(UIWindow *window) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
+    WriteLog(@"HongGuoFullScreen 加载成功");
 }
