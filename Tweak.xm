@@ -1,188 +1,189 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版（只输出日志，不修复）
-//  用于定位黑块的根本原因
+//  FanQieNoTabs — 番茄小说插件（修复默认启动页）
+//  功能：隐藏「短剧」「我的」「福利」Tab，默认启动页设置
+//  手势：双指双击菜单，切换需重启
 // =============================================================
 #import <UIKit/UIKit.h>
-#import <substrate.h>
-#import <stdarg.h>
+#import <objc/runtime.h>
 
-static void WriteLog(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
-    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
+// ---------- 开关判断 ----------
+static BOOL FQIsEnabled() {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"FanQieNoTabsEnabled"];
+}
 
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *documentsDirectory = [paths firstObject];
-    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
+static BOOL FQShouldApply() {
+    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    return [bundleID isEqualToString:@"com.dragon.read"] && FQIsEnabled();
+}
 
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:documentsDirectory]) {
-        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+// 默认启动页：0=书城，1=书架
+static NSInteger FQDefaultTab() {
+    return [[NSUserDefaults standardUserDefaults] integerForKey:@"FanQieDefaultTab"];
+}
+
+// 过滤 items
+static NSArray<UITabBarItem *> *FQFilterItems(NSArray<UITabBarItem *> *items) {
+    if (!FQIsEnabled()) return items;
+    if (items.count == 0) return items;
+    NSMutableArray *result = [NSMutableArray array];
+    for (UITabBarItem *item in items) {
+        NSString *title = item.title;
+        if (title && ([title isEqualToString:@"短剧"] || [title isEqualToString:@"我的"] || [title isEqualToString:@"福利"])) {
+            continue;
+        }
+        [result addObject:item];
     }
-
-    NSDateFormatter *df = [[NSDateFormatter alloc] init];
-    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
-    NSString *timestamp = [df stringFromDate:[NSDate date]];
-    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
-
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) {
-        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    }
-    NSLog(@"[HongGuo-Diag] %@", msg);
+    return result;
 }
 
-static BOOL isEnabled() {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
-}
-
-static NSInteger defaultTabIndex() {
-    return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
-}
-
-static NSInteger indexOfMyVC(NSArray *vcs) {
-    for (NSInteger i = 0; i < vcs.count; i++) {
-        UIViewController *vc = vcs[i];
+// 过滤 ViewControllers
+static NSArray<UIViewController *> *FQFilterViewControllers(NSArray<UIViewController *> *vcs) {
+    if (!FQIsEnabled()) return vcs;
+    if (vcs.count == 0) return vcs;
+    NSMutableArray *result = [NSMutableArray array];
+    for (UIViewController *vc in vcs) {
         NSString *title = vc.tabBarItem.title;
-        if ([title isEqualToString:@"我的"]) {
+        if (title && ([title isEqualToString:@"短剧"] || [title isEqualToString:@"我的"] || [title isEqualToString:@"福利"])) {
+            continue;
+        }
+        [result addObject:vc];
+    }
+    return result;
+}
+
+// 获取“书架”视图控制器的索引
+static NSInteger FQIndexOfShelfVC(NSArray<UIViewController *> *vcs) {
+    for (NSInteger i = 0; i < vcs.count; i++) {
+        NSString *title = vcs[i].tabBarItem.title;
+        if ([title isEqualToString:@"书架"]) {
             return i;
         }
     }
     return -1;
 }
 
-// 辅助函数：打印视图的详细背景信息
-static void logViewBackground(UIView *view, NSString *label) {
-    if (!view) {
-        WriteLog(@"  %@: view is nil", label);
-        return;
-    }
-    WriteLog(@"  %@: %@", label, NSStringFromClass([view class]));
-    WriteLog(@"    frame: %@", NSStringFromCGRect(view.frame));
-    WriteLog(@"    backgroundColor: %@", view.backgroundColor ?: @"nil");
-    WriteLog(@"    hidden: %d, alpha: %.2f", view.hidden, view.alpha);
-    WriteLog(@"    layer.backgroundColor: %@", view.layer.backgroundColor ? [UIColor colorWithCGColor:view.layer.backgroundColor] : @"nil");
-    WriteLog(@"    layer.cornerRadius: %.2f, masksToBounds: %d", view.layer.cornerRadius, view.layer.masksToBounds);
-    if ([view isKindOfClass:[UITabBar class]]) {
-        UITabBar *tabBar = (UITabBar *)view;
-        WriteLog(@"    barTintColor: %@", tabBar.barTintColor ?: @"nil");
-        WriteLog(@"    translucent: %d", tabBar.translucent);
-        WriteLog(@"    backgroundImage: %@", tabBar.backgroundImage ? @"exists" : @"nil");
-        WriteLog(@"    shadowImage: %@", tabBar.shadowImage ? @"exists" : @"nil");
-    }
-}
-
-// 递归打印子视图背景
-static void logSubviewsBackground(UIView *view, NSInteger depth) {
-    if (!view) return;
-    NSString *indent = [@"  " stringByPaddingToLength:depth*2 withString:@" " startingAtIndex:0];
-    WriteLog(@"%@%@ frame:%@ backgroundColor:%@ layer.bg:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame), view.backgroundColor ?: @"nil", view.layer.backgroundColor ? [UIColor colorWithCGColor:view.layer.backgroundColor] : @"nil");
-    for (UIView *sub in view.subviews) {
-        logSubviewsBackground(sub, depth+1);
-    }
-}
-
 // =============================================================
-// Hook SSTabBar — 只记录日志，不修改
+// Hook 部分
 // =============================================================
-%hook SSTabBar
-
-- (void)setAlpha:(CGFloat)alpha {
-    WriteLog(@"SSTabBar setAlpha called with %.2f", alpha);
-    %orig(alpha);
-}
-
-- (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    WriteLog(@"SSTabBar setItems called with %lu items", (unsigned long)items.count);
-    if (isEnabled() && items.count > 2) {
-        NSArray *filtered = @[items[0], items[4]];
-        WriteLog(@"Filtering items to %@, %@", [(UITabBarItem *)items[0] title], [(UITabBarItem *)items[4] title]);
-        %orig(filtered, animated);
-        return;
+%hook UITabBar
+- (void)setItems:(NSArray<UITabBarItem *> *)items animated:(BOOL)animated {
+    if (FQShouldApply()) {
+        items = FQFilterItems(items);
     }
     %orig(items, animated);
 }
 %end
 
-// =============================================================
-// Hook SSTabBarController — 记录生命周期和状态
-// =============================================================
-%hook SSTabBarController
-
+%hook UITabBarController
 - (void)viewDidLoad {
     %orig;
-    WriteLog(@"SSTabBarController viewDidLoad");
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        WriteLog(@"  defaultTabIndex: %ld", (long)defaultTabIndex());
-        WriteLog(@"  selectedIndex: %ld", (long)tab.selectedIndex);
-        logViewBackground(tab.tabBar, @"tabBar in viewDidLoad");
-    }
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    WriteLog(@"SSTabBarController viewWillAppear (animated=%d)", animated);
-    if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
-            WriteLog(@"  Setting selectedIndex to %ld (my)", (long)myIndex);
-            tab.selectedIndex = myIndex;
-        } else {
-            WriteLog(@"  selectedIndex already correct or myVC not found");
+    if (FQShouldApply()) {
+        // 首次过滤 viewControllers
+        NSArray *filtered = FQFilterViewControllers(self.viewControllers);
+        if (filtered.count < self.viewControllers.count) {
+            [self setViewControllers:filtered animated:NO];
         }
-    }
-    %orig;
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        WriteLog(@"  after viewWillAppear: selectedIndex=%ld", (long)tab.selectedIndex);
-        logViewBackground(tab.tabBar, @"tabBar in viewWillAppear (after)");
+        // 设置默认启动页（放在这里确保 viewControllers 已过滤）
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            NSInteger defaultTab = FQDefaultTab();
+            if (defaultTab == 1) { // 书架
+                NSInteger shelfIndex = FQIndexOfShelfVC(self.viewControllers);
+                if (shelfIndex != -1) {
+                    self.selectedIndex = shelfIndex;
+                } else {
+                    self.selectedIndex = 0;
+                }
+            } else {
+                self.selectedIndex = 0; // 书城
+            }
+            [self.tabBar setNeedsLayout];
+            [self.tabBar layoutIfNeeded];
+        });
     }
 }
 
+// 在 viewDidAppear 中兜底，防止被重置
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    WriteLog(@"SSTabBarController viewDidAppear");
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        WriteLog(@"  selectedIndex: %ld", (long)tab.selectedIndex);
-        WriteLog(@"  selectedViewController: %@", NSStringFromClass([tab.selectedViewController class]));
-        logViewBackground(tab.tabBar, @"tabBar in viewDidAppear");
-        
-        // 详细打印 tabBar 的所有子视图背景
-        WriteLog(@"  tabBar subviews background detail:");
-        logSubviewsBackground(tab.tabBar, 0);
-        
-        // 检查 tabBar 的 superview 背景
-        UIView *superview = tab.tabBar.superview;
-        WriteLog(@"  tabBar.superview: %@", NSStringFromClass([superview class]));
-        logViewBackground(superview, @"  superview");
-        
-        // 检查主题状态
-        id themeManager = NSClassFromString(@"AWEUIThemeManager");
-        if (themeManager) {
-            id shared = [themeManager performSelector:@selector(sharedManager)];
-            if (shared) {
-                BOOL isLight = [[shared valueForKey:@"isLightTheme"] boolValue];
-                WriteLog(@"  AWEUIThemeManager isLightTheme: %d", isLight);
+    if (!FQShouldApply()) return;
+    
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // 延迟一帧确保完全加载
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSInteger defaultTab = FQDefaultTab();
+            if (defaultTab == 1) {
+                NSInteger shelfIndex = FQIndexOfShelfVC(self.viewControllers);
+                if (shelfIndex != -1 && self.selectedIndex != shelfIndex) {
+                    self.selectedIndex = shelfIndex;
+                    [self.tabBar setNeedsLayout];
+                    [self.tabBar layoutIfNeeded];
+                }
+            }
+        });
+    });
+}
+
+- (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers animated:(BOOL)animated {
+    if (FQShouldApply()) {
+        NSArray *filtered = FQFilterViewControllers(viewControllers);
+        %orig(filtered, animated);
+        NSArray *filteredItems = FQFilterItems(self.tabBar.items);
+        [self.tabBar setValue:filteredItems forKey:@"items"];
+        [self.tabBar setNeedsLayout];
+        [self.tabBar layoutIfNeeded];
+        return;
+    }
+    %orig(viewControllers, animated);
+}
+
+- (void)setViewControllers:(NSArray<UIViewController *> *)viewControllers {
+    if (FQShouldApply()) {
+        NSArray *filtered = FQFilterViewControllers(viewControllers);
+        %orig(filtered);
+        NSArray *filteredItems = FQFilterItems(self.tabBar.items);
+        [self.tabBar setValue:filteredItems forKey:@"items"];
+        [self.tabBar setNeedsLayout];
+        [self.tabBar layoutIfNeeded];
+        return;
+    }
+    %orig(viewControllers);
+}
+
+- (void)setSelectedIndex:(NSInteger)selectedIndex {
+    if (FQShouldApply()) {
+        if (selectedIndex >= self.viewControllers.count) {
+            selectedIndex = 0;
+        }
+        if (selectedIndex < self.viewControllers.count) {
+            UIViewController *targetVC = self.viewControllers[selectedIndex];
+            NSString *title = targetVC.tabBarItem.title;
+            if ([title isEqualToString:@"短剧"]) {
+                NSInteger shelfIndex = FQIndexOfShelfVC(self.viewControllers);
+                if (shelfIndex != -1) {
+                    selectedIndex = shelfIndex;
+                } else {
+                    selectedIndex = 0;
+                }
             }
         }
+        %orig(selectedIndex);
+        return;
     }
+    %orig(selectedIndex);
 }
 %end
 
 // =============================================================
-// 双指双击菜单（保持原样）
+// 手势控制：双指双击菜单（含重启确认）
 // =============================================================
+
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
-    while (top.presentedViewController) top = top.presentedViewController;
+    while (top.presentedViewController) {
+        top = top.presentedViewController;
+    }
     UIAlertController *toast = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
     [top presentViewController:toast animated:YES completion:nil];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -190,18 +191,22 @@ static void showToast(NSString *msg, UIWindow *window) {
     });
 }
 
+// 默认启动页设置子菜单
 static void showDefaultTabMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    while (topVC.presentedViewController) {
+        topVC = topVC.presentedViewController;
+    }
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认打开页面"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认启动页"
                                                                    message:@"选择应用启动时默认进入的页面"
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
     
-    NSInteger current = defaultTabIndex();
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
+    NSInteger current = FQDefaultTab();
+    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 书城", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"FanQieDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
+        // 询问重启
         UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
                                                                          message:@"设置已保存，需要重启应用才能生效，是否立即重启？"
                                                                   preferredStyle:UIAlertControllerStyleAlert];
@@ -212,8 +217,8 @@ static void showDefaultTabMenu(UIWindow *window) {
         [topVC presentViewController:restart animated:YES completion:nil];
     }]];
     
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 我的", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"HongGuoDefaultTab"];
+    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 书架", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"FanQieDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
         UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
                                                                          message:@"设置已保存，需要重启应用才能生效，是否立即重启？"
@@ -236,93 +241,114 @@ static void showDefaultTabMenu(UIWindow *window) {
 
 static void showSettingsMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-
-    BOOL enabled = isEnabled();
-    NSInteger defaultTab = defaultTabIndex();
-    NSString *defaultText = defaultTab == 0 ? @"首页" : @"我的";
+    while (topVC.presentedViewController) {
+        topVC = topVC.presentedViewController;
+    }
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简Tab控制"
-                                                                   message:[NSString stringWithFormat:@"当前状态：%@\n默认打开：%@", enabled ? @"已开启" : @"已关闭", defaultText]
+    BOOL enabled = FQIsEnabled();
+    NSInteger defaultTab = FQDefaultTab();
+    NSString *defaultText = defaultTab == 0 ? @"书城" : @"书架";
+    NSString *status = enabled ? @"已开启" : @"已关闭";
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"番茄小说界面控制"
+                                                                   message:[NSString stringWithFormat:@"当前状态：%@\n默认启动：%@", status, defaultText]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-
-    [alert addAction:[UIAlertAction actionWithTitle:enabled ? @"关闭功能" : @"开启功能" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"提示"
-                                                                         message:@"切换后需重启 App 生效，确定？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            [[NSUserDefaults standardUserDefaults] setBool:!enabled forKey:@"HongGuoFullScreenEnabled"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                             message:@"是否立即重启？"
-                                                                      preferredStyle:UIAlertControllerStyleAlert];
-            [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-                exit(0);
-            }]];
-            [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-                showToast(@"请手动重启红果短剧", window);
-            }]];
-            UIViewController *top = window.rootViewController;
-            while (top.presentedViewController) top = top.presentedViewController;
-            [top presentViewController:restart animated:YES completion:nil];
-        }]];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-        UIViewController *top = window.rootViewController;
-        while (top.presentedViewController) top = top.presentedViewController;
-        [top presentViewController:confirm animated:YES completion:nil];
-    }]];
-
-    [alert addAction:[UIAlertAction actionWithTitle:@"设置默认打开页面" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+    
+    // 开关切换（含重启确认）
+    NSString *actionTitle = enabled ? @"关闭隐藏功能" : @"开启隐藏功能";
+    [alert addAction:[UIAlertAction actionWithTitle:actionTitle
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction * _Nonnull action) {
+                                                // 先确认切换
+                                                UIAlertController *confirmAlert = [UIAlertController alertControllerWithTitle:@"提示"
+                                                                                                                       message:@"切换后需要重启 App 才能完全生效，确定要继续吗？"
+                                                                                                                preferredStyle:UIAlertControllerStyleAlert];
+                                                [confirmAlert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                                                    BOOL newState = !enabled;
+                                                    [[NSUserDefaults standardUserDefaults] setBool:newState forKey:@"FanQieNoTabsEnabled"];
+                                                    [[NSUserDefaults standardUserDefaults] synchronize];
+                                                    // 询问重启
+                                                    UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
+                                                                                                                     message:[NSString stringWithFormat:@"已%@隐藏功能，需要重启应用才能生效，是否立即重启？", newState ? @"开启" : @"关闭"]
+                                                                                                              preferredStyle:UIAlertControllerStyleAlert];
+                                                    [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
+                                                        exit(0);
+                                                    }]];
+                                                    [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:nil]];
+                                                    [topVC presentViewController:restart animated:YES completion:nil];
+                                                }]];
+                                                [confirmAlert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+                                                UIViewController *top = window.rootViewController;
+                                                while (top.presentedViewController) {
+                                                    top = top.presentedViewController;
+                                                }
+                                                [top presentViewController:confirmAlert animated:YES completion:nil];
+                                            }]];
+    
+    // 设置默认启动页
+    [alert addAction:[UIAlertAction actionWithTitle:@"设置默认启动页" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         showDefaultTabMenu(window);
     }]];
-
+    
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
         alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
     }
+    
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
 // =============================================================
-// Hook UIWindow：双指双击
+// Hook UIWindow：双指双击手势
 // =============================================================
 %hook UIWindow
+
 - (instancetype)initWithFrame:(CGRect)frame {
     self = %orig;
     if (self) {
-        UITapGestureRecognizer *gesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hg_handleDoubleTap:)];
+        UITapGestureRecognizer *gesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(fq_handleDoubleTap:)];
         gesture.numberOfTouchesRequired = 2;
         gesture.numberOfTapsRequired = 2;
+        gesture.cancelsTouchesInView = NO;
+        gesture.delaysTouchesBegan = NO;
+        gesture.delaysTouchesEnded = NO;
         [self addGestureRecognizer:gesture];
+        NSLog(@"[FanQieNoTabs] 双指双击手势已添加");
     }
     return self;
 }
+
 %new
-- (void)hg_handleDoubleTap:(UITapGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateRecognized) {
-        if (@available(iOS 10.0, *)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        }
-        showSettingsMenu(self);
+- (void)fq_handleDoubleTap:(UITapGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateRecognized) return;
+    if (@available(iOS 10.0, *)) {
+        UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [generator prepare];
+        [generator impactOccurred];
     }
+    showSettingsMenu(self);
 }
+
 %end
 
 // =============================================================
-// 构造函数
+// 构造函数：初始化默认状态
 // =============================================================
 %ctor {
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoFullScreenEnabled"]) {
-        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoFullScreenEnabled"];
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"FanQieNoTabsEnabled"]) {
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FanQieNoTabsEnabled"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoDefaultTab"]) {
-        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"FanQieDefaultTab"]) {
+        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"FanQieDefaultTab"]; // 默认书城
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    WriteLog(@"HongGuoFullScreen 诊断版加载");
-    WriteLog(@"Bundle ID: %@", [[NSBundle mainBundle] bundleIdentifier]);
-    WriteLog(@"开关状态: %@", isEnabled() ? @"开启" : @"关闭");
-    WriteLog(@"默认打开: %@", defaultTabIndex() == 0 ? @"首页" : @"我的");
+    
+    if (FQShouldApply()) {
+        NSLog(@"[FanQieNoTabs] 加载成功（开关已开启，默认启动：%@）", FQDefaultTab() == 0 ? @"书城" : @"书架");
+    } else {
+        NSLog(@"[FanQieNoTabs] 加载成功（开关已关闭）");
+    }
 }
