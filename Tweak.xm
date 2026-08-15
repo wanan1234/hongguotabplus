@@ -96,15 +96,17 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 static void switchToFilteredTab(UITabBarController *tab, NSInteger filteredIndex) {
     if (!tab || !isEnabled()) return;
     NSArray *vcs = tab.viewControllers;
-    if (vcs.count < 5) return;
+    if (vcs.count < 5) {
+        WriteLog(@"⚠️ viewControllers 数量 < 5，无法获取原始 item");
+        return;
+    }
     UITabBar *tabBar = tab.tabBar;
 
     // 如果 items 不是 2，说明过滤失效，立即重新过滤
     if (tabBar.items.count != 2) {
         WriteLog(@"⚠️ tabBar.items 数量不是2，当前: %lu，尝试重新过滤", (unsigned long)tabBar.items.count);
-        // 从原始的 viewControllers 中获取首页和我的 item
-        UITabBarItem *homeItem = vcs[0].tabBarItem;
-        UITabBarItem *myItem = vcs[4].tabBarItem;
+        UITabBarItem *homeItem = ((UIViewController *)vcs[0]).tabBarItem;
+        UITabBarItem *myItem = ((UIViewController *)vcs[4]).tabBarItem;
         if (homeItem && myItem) {
             [tabBar setItems:@[homeItem, myItem] animated:NO];
             WriteLog(@"已重新设置 tabBar.items");
@@ -256,7 +258,7 @@ static void switchToFilteredTab(UITabBarController *tab, NSInteger filteredIndex
 %end
 
 // =============================================================
-// 双指双击菜单（完整保留，此处只写核心，实际请粘贴完整菜单）
+// 双指双击菜单（完整保留）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
