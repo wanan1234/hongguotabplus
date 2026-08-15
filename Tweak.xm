@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版 v4（强制滚动归零 + 多次刷新）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 强制顶部归零
+//  HongGuoFullScreen — 最终暴力版（强制调整UICollectionView位置）
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 彻底移除顶部空白
 //  诊断日志：进入“我的”页面时打印视图树到 Documents/viewHierarchy.log
 // =============================================================
 #import <UIKit/UIKit.h>
@@ -62,41 +62,26 @@ static void logMyPageViewHierarchy(UIViewController *myVC) {
 }
 
 // =============================================================
-// 彻底隐藏顶部 + 强制滚动归零（多次尝试）
+// 暴力调整布局（隐藏所有横幅 + 强制移动UICollectionView）
 // =============================================================
 static void hideTopBannerInMyPage(UIViewController *myVC) {
     if (!myVC || !isEnabled()) return;
     UIView *rootView = myVC.view;
     if (!rootView) return;
 
-    // ---- 1. 移除可见的顶部横幅 ----
-    UIView *bannerToRemove = nil;
-    for (UIView *sub in rootView.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
-            CGRect frame = sub.frame;
-            if (frame.origin.y == 0 && frame.size.height > 300) {
-                bannerToRemove = sub;
-                break;
-            }
-        }
-    }
-    if (bannerToRemove) {
-        [bannerToRemove removeFromSuperview];
-        NSLog(@"[HongGuo] 已从视图树移除顶部横幅");
-    } else {
-        // 备用：移除第一个高度>300且y=0的视图
-        for (UIView *sub in rootView.subviews) {
-            if (sub.frame.origin.y == 0 && sub.frame.size.height > 300 &&
-                ![sub isKindOfClass:[UIScrollView class]] &&
-                ![NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
-                [sub removeFromSuperview];
-                NSLog(@"[HongGuo] 备用移除: %@", NSStringFromClass([sub class]));
-                break;
+    // ---- 1. 隐藏所有高度 > 200 的 FQReaderSaaSBaseImageView（无论层级） ----
+    NSMutableArray *allViews = [NSMutableArray array];
+    [self getAllSubviews:rootView intoArray:allViews];
+    for (UIView *view in allViews) {
+        if ([NSStringFromClass([view class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
+            if (view.frame.size.height > 200) {
+                view.hidden = YES;
+                NSLog(@"[HongGuo] 隐藏横幅: %@", NSStringFromCGRect(view.frame));
             }
         }
     }
 
-    // ---- 2. 查找滚动视图 ----
+    // ---- 2. 查找滚动视图 SSMyUser637NestedContainerScrollView ----
     UIScrollView *scrollView = nil;
     for (UIView *sub in rootView.subviews) {
         if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
@@ -107,64 +92,57 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
         }
     }
 
-    if (scrollView) {
-        // 3. 强制调整滚动视图的 frame（确保从顶部开始）
-        CGRect frame = scrollView.frame;
-        if (frame.origin.y != 0) {
-            frame.origin.y = 0;
-            scrollView.frame = frame;
-            NSLog(@"[HongGuo] 滚动视图 frame 已调整: %@", NSStringFromCGRect(frame));
-        }
-
-        // 4. 重置 contentInset
-        UIEdgeInsets insets = scrollView.contentInset;
-        if (insets.top != 0) {
-            insets.top = 0;
-            scrollView.contentInset = insets;
-            NSLog(@"[HongGuo] contentInset.top 已重置为 0");
-        }
-
-        // 5. 强制归零 contentOffset（立即执行+延迟重复）
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-            [scrollView setNeedsLayout];
-            [scrollView layoutIfNeeded];
-            NSLog(@"[HongGuo] 滚动视图偏移归零（第1次）");
-        });
-        // 再延迟执行两次，确保系统不会覆盖
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-            [scrollView layoutIfNeeded];
-            NSLog(@"[HongGuo] 滚动视图偏移归零（第2次）");
-        });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-            [scrollView layoutIfNeeded];
-            NSLog(@"[HongGuo] 滚动视图偏移归零（第3次）");
-        });
-
-        // 6. 隐藏滚动内容中的顶部占位视图（高度约91）
-        for (UIView *sub in scrollView.subviews) {
-            if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollContentView"]) {
-                if (sub.subviews.count > 0) {
-                    UIView *firstChild = sub.subviews[0];
-                    if (firstChild.frame.size.height >= 80 && firstChild.frame.size.height <= 100) {
-                        firstChild.hidden = YES;
-                        NSLog(@"[HongGuo] 隐藏滚动内容内顶部占位视图");
-                    }
-                }
-                break;
-            }
-        }
-    } else {
+    if (!scrollView) {
         NSLog(@"[HongGuo] 未找到滚动视图");
+        return;
     }
 
-    // 7. 强制刷新根视图布局
+    // ---- 3. 强制调整滚动视图的 contentInset 和 frame ----
+    UIEdgeInsets insets = scrollView.contentInset;
+    if (insets.top != 0) {
+        insets.top = 0;
+        scrollView.contentInset = insets;
+        NSLog(@"[HongGuo] 重置 contentInset.top = 0");
+    }
+    if (scrollView.contentOffset.y != 0) {
+        [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
+        NSLog(@"[HongGuo] 归零 contentOffset");
+    }
+
+    // ---- 4. 找到滚动内容中的 UICollectionView 并上移 ----
+    for (UIView *sub in scrollView.subviews) {
+        if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollContentView"]) {
+            // 遍历内容视图的子视图，找到 UICollectionView
+            for (UIView *child in sub.subviews) {
+                if ([child isKindOfClass:[UICollectionView class]]) {
+                    CGRect frame = child.frame;
+                    if (frame.origin.y != 0) {
+                        frame.origin.y = 0;
+                        child.frame = frame;
+                        NSLog(@"[HongGuo] 已将 UICollectionView frame.y 设为 0");
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    // ---- 5. 再次强制刷新布局（多次延迟） ----
     dispatch_async(dispatch_get_main_queue(), ^{
-        [rootView setNeedsLayout];
-        [rootView layoutIfNeeded];
+        [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
+        [scrollView setNeedsLayout];
+        [scrollView layoutIfNeeded];
+        NSLog(@"[HongGuo] 刷新布局完成");
     });
+}
+
+// 辅助：递归获取所有子视图
+static void getAllSubviews(UIView *view, NSMutableArray *array) {
+    [array addObject:view];
+    for (UIView *sub in view.subviews) {
+        getAllSubviews(sub, array);
+    }
 }
 
 // =============================================================
@@ -215,7 +193,6 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
                 hideTopBannerInMyPage(selectedVC);
                 logMyPageViewHierarchy(selectedVC);
             });
-            // 额外再延迟一次，确保完全生效
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 hideTopBannerInMyPage(selectedVC);
             });
