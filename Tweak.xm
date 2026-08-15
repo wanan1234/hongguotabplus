@@ -1,10 +1,44 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（不修改 alpha，修正 frame + barTintColor）
-//  编译通过，完全移除 alpha 相关操作
+//  HongGuoFullScreen — 诊断 + 修复版（不碰 alpha）
+//  修正 frame，设置 barTintColor，保留完整诊断日志
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
+#import <stdarg.h>
 
+// ---------- 诊断日志 ----------
+static void WriteLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths firstObject];
+    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:documentsDirectory]) {
+        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+    NSString *timestamp = [df stringFromDate:[NSDate date]];
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!fh) {
+        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
+    NSLog(@"[HongGuo] %@", msg);
+}
+
+// ---------- 开关 ----------
 static BOOL isEnabled() {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
 }
@@ -24,7 +58,18 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// 获取当前页面背景色
+// ---------- 诊断：记录 tabBar 状态 ----------
+static void logTabBarState(UITabBar *tabBar, NSString *tag) {
+    if (!tabBar) return;
+    WriteLog(@"  [%@] alpha=%.3f frame=%@ barTintColor=%@ bgColor=%@",
+             tag,
+             tabBar.alpha,
+             NSStringFromCGRect(tabBar.frame),
+             tabBar.barTintColor ?: @"nil",
+             tabBar.backgroundColor ?: @"nil");
+}
+
+// ---------- 获取当前页面背景色 ----------
 static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
     UIViewController *selected = tab.selectedViewController;
     if (!selected) return [UIColor whiteColor];
@@ -35,16 +80,17 @@ static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
     return [UIColor whiteColor];
 }
 
-// 修复 tabBar（不修改 alpha，只修正 frame 和颜色）
+// ---------- 修复 tabBar ----------
 static void fixTabBar(UITabBarController *tab) {
     if (!tab) return;
     UITabBar *tabBar = tab.tabBar;
 
-    // 1. 修正 frame（基于日志数据）
+    // 1. 修正 frame（基于诊断数据）
     CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
     CGFloat tabBarHeight = 84.0;
     CGRect correctFrame = CGRectMake(0, screenHeight - tabBarHeight, tabBar.frame.size.width, tabBarHeight);
     if (!CGRectEqualToRect(tabBar.frame, correctFrame)) {
+        WriteLog(@"fixTabBar: 修正 frame 从 %@ 到 %@", NSStringFromCGRect(tabBar.frame), NSStringFromCGRect(correctFrame));
         tabBar.frame = correctFrame;
     }
 
@@ -53,6 +99,7 @@ static void fixTabBar(UITabBarController *tab) {
     if (bgColor) {
         tabBar.barTintColor = bgColor;
         tabBar.translucent = NO;
+        WriteLog(@"fixTabBar: 设置 barTintColor = %@", bgColor);
     }
 
     // 3. 刷新背景视图
@@ -63,17 +110,21 @@ static void fixTabBar(UITabBarController *tab) {
 
     [tabBar setNeedsLayout];
     [tabBar layoutIfNeeded];
+
+    logTabBarState(tabBar, @"fixTabBar 完成");
 }
 
 // =============================================================
-// Hook SSTabBar（过滤 items）
+// Hook CYLTabBar（红果实际使用的 TabBar）
 // =============================================================
-%hook SSTabBar
+%hook CYLTabBar
+
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
+        WriteLog(@"CYLTabBar setItems: 过滤 items 到 2 个");
         %orig(filtered, animated);
-        // 查找 UITabBarController（使用 id 类型避免前向声明问题）
+        // 查找控制器并修复
         id responder = self;
         while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
             responder = [responder nextResponder];
@@ -85,6 +136,14 @@ static void fixTabBar(UITabBarController *tab) {
     }
     %orig(items, animated);
 }
+
+// 记录 setFrame 调用
+- (void)setFrame:(CGRect)frame {
+    WriteLog(@"CYLTabBar setFrame: %@", NSStringFromCGRect(frame));
+    %orig(frame);
+    logTabBarState((UITabBar *)self, @"setFrame 完成");
+}
+
 %end
 
 // =============================================================
@@ -94,11 +153,13 @@ static void fixTabBar(UITabBarController *tab) {
 
 - (void)viewDidLoad {
     %orig;
+    WriteLog(@"SSTabBarController viewDidLoad");
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
         if (tab.selectedIndex >= tab.viewControllers.count) {
             tab.selectedIndex = 0;
         }
+        logTabBarState(tab.tabBar, @"viewDidLoad");
         fixTabBar(tab);
     }
 }
@@ -109,6 +170,7 @@ static void fixTabBar(UITabBarController *tab) {
         NSArray *vcs = tab.viewControllers;
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
+            WriteLog(@"viewWillAppear: 设置 selectedIndex 为 %ld (我的)", (long)myIndex);
             tab.selectedIndex = myIndex;
         }
     }
@@ -124,11 +186,13 @@ static void fixTabBar(UITabBarController *tab) {
 
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        WriteLog(@"viewDidAppear: 开始延迟修复");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UITabBarController *tab = (UITabBarController *)self;
             fixTabBar(tab);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 fixTabBar(tab);
+                WriteLog(@"viewDidAppear: 修复完成");
             });
         });
     });
@@ -154,6 +218,7 @@ static void fixTabBar(UITabBarController *tab) {
         if ([title isEqualToString:@"剧场"]) {
             NSInteger myIndex = indexOfMyVC(vcs);
             if (myIndex != -1) {
+                WriteLog(@"setSelectedIndex: 重定向 '剧场' -> '我的'");
                 %orig(myIndex);
                 fixTabBar(tab);
                 return;
@@ -288,6 +353,7 @@ static void showSettingsMenu(UIWindow *window) {
         gesture.numberOfTouchesRequired = 2;
         gesture.numberOfTapsRequired = 2;
         [self addGestureRecognizer:gesture];
+        WriteLog(@"双指双击手势已添加");
     }
     return self;
 }
@@ -297,6 +363,7 @@ static void showSettingsMenu(UIWindow *window) {
         if (@available(iOS 10.0, *)) {
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
         }
+        WriteLog(@"用户触发双指双击菜单");
         showSettingsMenu(self);
     }
 }
@@ -314,5 +381,6 @@ static void showSettingsMenu(UIWindow *window) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    NSLog(@"[HongGuo] HongGuoFullScreen 加载成功，默认打开：%@", defaultTabIndex() == 0 ? @"首页" : @"我的");
+    WriteLog(@"HongGuoFullScreen 加载成功，默认打开：%@", defaultTabIndex() == 0 ? @"首页" : @"我的");
+    WriteLog(@"========================================");
 }
