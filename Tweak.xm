@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（模拟点击标签）
-//  通过模拟点击“我的”标签，强制刷新 TabBar 状态
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（模拟点击刷新）
+//  通过模拟点击“我的”标签强制刷新 TabBar 外观
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -60,7 +60,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// 3. 在 viewWillAppear 中设置默认页面（无声音版本）
+// 3. 在 viewWillAppear 中前置设置 selectedIndex（无声音版本）
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -86,39 +86,29 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
             NSInteger myIndex = indexOfMyVC(vcs);
             if (myIndex == -1) return;
 
-            // 模拟点击“我的”标签
-            // 方法1：调用 tabBarController 的 selectedIndex 设置（但可能无效，我们已经做过）
-            // 方法2：直接找到对应的 UITabBarButton 并模拟点击
-            // 方法2更可靠，因为用户手动点击有效
-
             UITabBar *tabBar = tab.tabBar;
             NSArray *buttons = tabBar.subviews;
             // 遍历子视图找到 UITabBarButton
             for (UIView *view in buttons) {
                 if ([NSStringFromClass([view class]) containsString:@"UITabBarButton"]) {
-                    // 获取按钮对应的 item
-                    // 由于没有公开 API，我们通过索引推断
-                    // 假设按钮顺序与 items 一致
                     NSInteger index = [buttons indexOfObject:view];
                     if (index == myIndex) {
-                        // 模拟点击
-                        [view sendActionsForControlEvents:UIControlEventTouchUpInside];
+                        // 强制转换为 UIControl 并发送点击事件
+                        if ([view isKindOfClass:[UIControl class]]) {
+                            UIControl *button = (UIControl *)view;
+                            [button sendActionsForControlEvents:UIControlEventTouchUpInside];
+                        }
                         break;
                     }
                 }
             }
-
-            // 兜底：强制刷新布局
-            [tabBar setNeedsLayout];
-            [tabBar layoutIfNeeded];
-            [tabBar setNeedsDisplay];
         });
     });
 }
 %end
 
 // =============================================================
-// 双指双击菜单（与之前完全相同）
+// 双指双击菜单
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
