@@ -1,76 +1,150 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（修复编译错误）
-//  强制转换类型，避免前向声明问题
+//  HongGuoFullScreen — 诊断版（只记录，不修改）
+//  记录 tabBar 所有属性变化，分析黑块原因
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
+#import <stdarg.h>
 
-static BOOL isEnabled() {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
-}
+// ---------- 日志工具 ----------
+static void WriteLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
 
-static NSInteger defaultTabIndex() {
-    return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
-}
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths firstObject];
+    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuoDiagnostic.log"];
 
-static NSInteger indexOfMyVC(NSArray *vcs) {
-    for (NSInteger i = 0; i < vcs.count; i++) {
-        UIViewController *vc = vcs[i];
-        NSString *title = vc.tabBarItem.title;
-        if ([title isEqualToString:@"我的"]) {
-            return i;
-        }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:documentsDirectory]) {
+        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
     }
-    return -1;
+
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+    NSString *timestamp = [df stringFromDate:[NSDate date]];
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!fh) {
+        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
+    NSLog(@"[HongGuo-Diag] %@", msg);
 }
 
-// 强制刷新 tabBar 背景视图（参数改为 id）
-static void refreshTabBarBackground(id tabBar) {
-    if (!tabBar) return;
-    if (![tabBar isKindOfClass:[UITabBar class]]) return;
-    UITabBar *tb = (UITabBar *)tabBar;
-    
-    // 方法1：通过 KVC 获取 _backgroundView
-    id backgroundView = [tb valueForKey:@"_backgroundView"];
-    if (backgroundView && [backgroundView respondsToSelector:@selector(setNeedsDisplay)]) {
-        [backgroundView performSelector:@selector(setNeedsDisplay)];
-        if ([backgroundView isKindOfClass:[UIVisualEffectView class]]) {
-            UIVisualEffectView *effectView = (UIVisualEffectView *)backgroundView;
-            UIVisualEffect *currentEffect = effectView.effect;
-            if (currentEffect) {
-                effectView.effect = nil;
-                effectView.effect = currentEffect;
-            }
-        }
-    }
-    
-    // 方法2：重新设置 barTintColor
-    UIColor *currentColor = tb.barTintColor;
-    if (currentColor) {
-        tb.barTintColor = nil;
-        tb.barTintColor = currentColor;
-    }
-    
-    [tb setNeedsLayout];
-    [tb layoutIfNeeded];
-}
-
-// =============================================================
-// Hook SSTabBar
-// =============================================================
-%hook SSTabBar
-
-- (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    if (isEnabled() && items.count > 2) {
-        NSArray *filtered = @[items[0], items[4]];
-        %orig(filtered, animated);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            refreshTabBarBackground(self);
-        });
+// ---------- 辅助函数：打印 tabBar 完整状态 ----------
+static void logTabBarState(UITabBar *tabBar, NSString *tag) {
+    if (!tabBar) {
+        WriteLog(@"%@: tabBar is nil", tag);
         return;
     }
-    %orig(items, animated);
+    WriteLog(@"===== %@ =====", tag);
+    WriteLog(@"  class: %@", NSStringFromClass([tabBar class]));
+    WriteLog(@"  frame: %@", NSStringFromCGRect(tabBar.frame));
+    WriteLog(@"  alpha: %.3f", tabBar.alpha);
+    WriteLog(@"  hidden: %d", tabBar.hidden);
+    WriteLog(@"  barTintColor: %@", tabBar.barTintColor ?: @"nil");
+    WriteLog(@"  translucent: %d", tabBar.translucent);
+    WriteLog(@"  backgroundImage: %@", tabBar.backgroundImage ? @"exists" : @"nil");
+    WriteLog(@"  shadowImage: %@", tabBar.shadowImage ? @"exists" : @"nil");
+    WriteLog(@"  backgroundColor: %@", tabBar.backgroundColor ?: @"nil");
+    
+    // layer 信息
+    WriteLog(@"  layer.backgroundColor: %@", tabBar.layer.backgroundColor ? [UIColor colorWithCGColor:tabBar.layer.backgroundColor] : @"nil");
+    WriteLog(@"  layer.opacity: %.3f", tabBar.layer.opacity);
+    WriteLog(@"  layer.hidden: %d", tabBar.layer.hidden);
+    
+    // 背景视图信息
+    id backgroundView = [tabBar valueForKey:@"_backgroundView"];
+    if (backgroundView) {
+        WriteLog(@"  _backgroundView: %@", NSStringFromClass([backgroundView class]));
+        WriteLog(@"    frame: %@", NSStringFromCGRect([backgroundView frame]));
+        WriteLog(@"    alpha: %.3f", [backgroundView alpha]);
+        WriteLog(@"    hidden: %d", [backgroundView isHidden]);
+        WriteLog(@"    backgroundColor: %@", [backgroundView backgroundColor] ?: @"nil");
+        WriteLog(@"    layer.backgroundColor: %@", [backgroundView layer].backgroundColor ? [UIColor colorWithCGColor:[backgroundView layer].backgroundColor] : @"nil");
+        WriteLog(@"    layer.opacity: %.3f", [backgroundView layer].opacity);
+        
+        // 如果是 UIVisualEffectView，记录 effect
+        if ([backgroundView isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *effectView = (UIVisualEffectView *)backgroundView;
+            WriteLog(@"    effect: %@", effectView.effect ? @"exists" : @"nil");
+        }
+    }
+    
+    // 子视图信息
+    WriteLog(@"  subviews count: %lu", (unsigned long)tabBar.subviews.count);
+    for (UIView *sub in tabBar.subviews) {
+        WriteLog(@"    sub: %@ frame=%@ alpha=%.3f hidden=%d", 
+                 NSStringFromClass([sub class]), 
+                 NSStringFromCGRect(sub.frame), 
+                 sub.alpha, 
+                 sub.hidden);
+    }
+    WriteLog(@"===== end =====\n");
 }
+
+// ---------- 辅助函数：打印控制器状态 ----------
+static void logControllerState(UITabBarController *tab, NSString *tag) {
+    if (!tab) return;
+    WriteLog(@"%@: selectedIndex=%ld, selectedItem=%@", 
+             tag, 
+             (long)tab.selectedIndex,
+             tab.tabBar.selectedItem.title ?: @"nil");
+}
+
+// =============================================================
+// Hook CYLTabBar — 记录所有关键方法
+// =============================================================
+%hook CYLTabBar
+
+- (void)setAlpha:(CGFloat)alpha {
+    WriteLog(@"[CYLTabBar setAlpha] %.3f -> %.3f (caller: %@)", self.alpha, alpha, [NSThread callStackSymbols][1]);
+    %orig(alpha);
+    logTabBarState(self, @"after setAlpha");
+}
+
+- (void)setHidden:(BOOL)hidden {
+    WriteLog(@"[CYLTabBar setHidden] %d -> %d", self.hidden, hidden);
+    %orig(hidden);
+    logTabBarState(self, @"after setHidden");
+}
+
+- (void)setBarTintColor:(UIColor *)barTintColor {
+    WriteLog(@"[CYLTabBar setBarTintColor] %@ -> %@", self.barTintColor, barTintColor);
+    %orig(barTintColor);
+    logTabBarState(self, @"after setBarTintColor");
+}
+
+- (void)layoutSubviews {
+    %orig;
+    // 只在 alpha 变化时记录（避免刷屏）
+    static CGFloat lastAlpha = -1;
+    if (fabs(self.alpha - lastAlpha) > 0.001) {
+        lastAlpha = self.alpha;
+        WriteLog(@"[CYLTabBar layoutSubviews] alpha changed to %.3f", self.alpha);
+        logTabBarState(self, @"layoutSubviews");
+    }
+}
+
+- (void)setItems:(NSArray *)items animated:(BOOL)animated {
+    WriteLog(@"[CYLTabBar setItems] count: %lu -> %lu", (unsigned long)self.items.count, (unsigned long)items.count);
+    %orig(items, animated);
+    logTabBarState(self, @"after setItems");
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    WriteLog(@"[CYLTabBar didMoveToWindow] window: %@", self.window ? @"exists" : @"nil");
+    logTabBarState(self, @"didMoveToWindow");
+}
+
 %end
 
 // =============================================================
@@ -80,88 +154,57 @@ static void refreshTabBarBackground(id tabBar) {
 
 - (void)viewDidLoad {
     %orig;
-    if (isEnabled()) {
-        // 强制转换为 UITabBarController
-        UITabBarController *tab = (UITabBarController *)self;
-        if (tab.selectedIndex >= tab.viewControllers.count) {
-            tab.selectedIndex = 0;
-        }
-    }
+    WriteLog(@"[SSTabBarController viewDidLoad]");
+    logControllerState((UITabBarController *)self, @"viewDidLoad");
+    logTabBarState(self.tabBar, @"viewDidLoad tabBar");
 }
 
 - (void)viewWillAppear:(BOOL)animated {
-    if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
-            tab.selectedIndex = myIndex;
-            refreshTabBarBackground(tab.tabBar);
-        }
-    }
+    WriteLog(@"[SSTabBarController viewWillAppear] animated=%d", animated);
     %orig;
+    logControllerState((UITabBarController *)self, @"viewWillAppear (after)");
+    logTabBarState(self.tabBar, @"viewWillAppear tabBar (after)");
 }
 
 - (void)viewDidAppear:(BOOL)animated {
+    WriteLog(@"[SSTabBarController viewDidAppear] animated=%d", animated);
     %orig;
-    if (!isEnabled()) return;
-
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UITabBarController *tab = (UITabBarController *)self;
-            
-            if (defaultTabIndex() == 1) {
-                NSInteger myIndex = indexOfMyVC(tab.viewControllers);
-                if (myIndex != -1 && tab.selectedIndex != myIndex) {
-                    tab.selectedIndex = myIndex;
-                }
-            }
-            
-            refreshTabBarBackground(tab.tabBar);
-            
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                refreshTabBarBackground(tab.tabBar);
-            });
-        });
-    });
+    logControllerState((UITabBarController *)self, @"viewDidAppear (after)");
+    logTabBarState(self.tabBar, @"viewDidAppear tabBar (after)");
 }
 
 // 拦截 setSelectedIndex
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        
-        if (selectedIndex >= vcs.count) {
-            %orig(0);
-            return;
-        }
-        
-        UIViewController *targetVC = vcs[selectedIndex];
-        NSString *title = targetVC.tabBarItem.title;
-        if ([title isEqualToString:@"剧场"]) {
-            NSInteger myIndex = indexOfMyVC(vcs);
-            if (myIndex != -1) {
-                %orig(myIndex);
-                refreshTabBarBackground(tab.tabBar);
-                return;
-            } else {
-                %orig(0);
-                return;
-            }
-        }
-    }
+    WriteLog(@"[SSTabBarController setSelectedIndex] %ld -> %ld", (long)self.selectedIndex, (long)selectedIndex);
     %orig(selectedIndex);
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        refreshTabBarBackground(tab.tabBar);
-    }
+    logControllerState((UITabBarController *)self, @"after setSelectedIndex");
+    logTabBarState(self.tabBar, @"after setSelectedIndex tabBar");
 }
+
 %end
 
 // =============================================================
-// 双指双击菜单（与之前相同）
+// Hook 主题相关（检测主题切换）
+// =============================================================
+%hook AWEUIThemeManager
+
+- (void)setIsLightTheme:(BOOL)isLightTheme {
+    WriteLog(@"[AWEUIThemeManager setIsLightTheme] %d -> %d", self.isLightTheme, isLightTheme);
+    %orig(isLightTheme);
+    // 主题切换后，延迟记录 tabBar 状态
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+        UIViewController *root = window.rootViewController;
+        if ([root isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
+            logTabBarState(((UITabBarController *)root).tabBar, @"after theme change");
+        }
+    });
+}
+
+%end
+
+// =============================================================
+// 双指双击菜单 + 查看日志
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -173,97 +216,28 @@ static void showToast(NSString *msg, UIWindow *window) {
     });
 }
 
-static void showDefaultTabMenu(UIWindow *window) {
-    UIViewController *topVC = window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认打开页面"
-                                                                   message:@"选择应用启动时默认进入的页面"
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    
-    NSInteger current = defaultTabIndex();
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                         message:@"设置已保存，需要重启应用才能生效，是否立即重启？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-            exit(0);
-        }]];
-        [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:nil]];
-        [topVC presentViewController:restart animated:YES completion:nil];
-    }]];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 我的", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"HongGuoDefaultTab"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                         message:@"设置已保存，需要重启应用才能生效，是否立即重启？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-            exit(0);
-        }]];
-        [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:nil]];
-        [topVC presentViewController:restart animated:YES completion:nil];
-    }]];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        alert.popoverPresentationController.sourceView = window;
-        alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
-    }
-    [topVC presentViewController:alert animated:YES completion:nil];
-}
-
 static void showSettingsMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
 
-    BOOL enabled = isEnabled();
-    NSInteger defaultTab = defaultTabIndex();
-    NSString *defaultText = defaultTab == 0 ? @"首页" : @"我的";
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简Tab控制"
-                                                                   message:[NSString stringWithFormat:@"当前状态：%@\n默认打开：%@", enabled ? @"已开启" : @"已关闭", defaultText]
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果诊断"
+                                                                   message:@"点击查看日志"
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
 
-    [alert addAction:[UIAlertAction actionWithTitle:enabled ? @"关闭功能" : @"开启功能" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"提示"
-                                                                         message:@"切换后需重启 App 生效，确定？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            [[NSUserDefaults standardUserDefaults] setBool:!enabled forKey:@"HongGuoFullScreenEnabled"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                             message:@"是否立即重启？"
-                                                                      preferredStyle:UIAlertControllerStyleAlert];
-            [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-                exit(0);
-            }]];
-            [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-                showToast(@"请手动重启红果短剧", window);
-            }]];
-            UIViewController *top = window.rootViewController;
-            while (top.presentedViewController) top = top.presentedViewController;
-            [top presentViewController:restart animated:YES completion:nil];
-        }]];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *documentsDirectory = [paths firstObject];
+        NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuoDiagnostic.log"];
+        NSString *logContent = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
+        if (!logContent) logContent = @"日志文件不存在或为空";
+        UIAlertController *logAlert = [UIAlertController alertControllerWithTitle:@"诊断日志" message:logContent preferredStyle:UIAlertControllerStyleAlert];
+        [logAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleDefault handler:nil]];
         UIViewController *top = window.rootViewController;
         while (top.presentedViewController) top = top.presentedViewController;
-        [top presentViewController:confirm animated:YES completion:nil];
-    }]];
-
-    [alert addAction:[UIAlertAction actionWithTitle:@"设置默认打开页面" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        showDefaultTabMenu(window);
+        [top presentViewController:logAlert animated:YES completion:nil];
     }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        alert.popoverPresentationController.sourceView = window;
-        alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
-    }
     [topVC presentViewController:alert animated:YES completion:nil];
 }
 
@@ -296,13 +270,8 @@ static void showSettingsMenu(UIWindow *window) {
 // 构造函数
 // =============================================================
 %ctor {
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoFullScreenEnabled"]) {
-        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoFullScreenEnabled"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-    }
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoDefaultTab"]) {
-        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-    }
-    NSLog(@"[HongGuo] HongGuoFullScreen 加载成功，默认打开：%@", defaultTabIndex() == 0 ? @"首页" : @"我的");
+    WriteLog(@"========================================");
+    WriteLog(@"HongGuoFullScreen 诊断版加载");
+    WriteLog(@"Bundle ID: %@", [[NSBundle mainBundle] bundleIdentifier]);
+    WriteLog(@"========================================");
 }
