@@ -1,5 +1,5 @@
 // =============================================================
-//  HongGuoFullScreen — 纯净版 + 索引映射 + 颜色同步
+//  HongGuoFullScreen — 纯净版 + 索引映射 + 颜色同步（修复编译）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
 //  修复：启动时TabBar正确高亮“我的”，颜色自动跟随页面
 // =============================================================
@@ -147,8 +147,8 @@ static void syncTabBarAppearance(UITabBarController *tab) {
         UITabBarController *tab = (UITabBarController *)self;
         NSInteger myIndex = indexOfMyVC(tab.viewControllers);
         if (myIndex != -1) {
-            // 直接调用 setSelectedIndex，会被我们的拦截处理
-            [self setSelectedIndex:myIndex];
+            // 直接调用 setSelectedIndex 会被我们的拦截处理
+            [(UITabBarController *)self setSelectedIndex:myIndex];
         }
     }
     %orig;
@@ -162,7 +162,7 @@ static void syncTabBarAppearance(UITabBarController *tab) {
             UITabBarController *tab = (UITabBarController *)self;
             NSInteger myIndex = indexOfMyVC(tab.viewControllers);
             if (myIndex != -1) {
-                [self setSelectedIndex:myIndex];
+                [(UITabBarController *)self setSelectedIndex:myIndex];
             }
         });
     }
