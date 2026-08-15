@@ -61,12 +61,11 @@ static void forceSelectMyTab(UITabBarController *tab) {
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
-        // 保留第0个（首页）和第4个（我的）
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
-        // 过滤后立即修正选中状态（如果默认是我的）
+        // 如果默认启动是我的，立即修正高亮
         if (defaultTabIndex() == 1) {
-            UIResponder *responder = self;
+            UIResponder *responder = (UIResponder *)self; // 强制转换，修复编译错误
             while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
                 responder = [responder nextResponder];
             }
@@ -94,14 +93,12 @@ static void forceSelectMyTab(UITabBarController *tab) {
             UIViewController *targetVC = vcs[selectedIndex];
             NSString *title = targetVC.tabBarItem.title;
             if ([title isEqualToString:@"剧场"]) {
-                // 重定向到“我的”
                 forceSelectMyTab(tab);
                 return;
             }
         }
     }
     %orig(selectedIndex);
-    // 如果默认是我的，切换后强制修正（可能切换到了其他标签）
     if (isEnabled() && defaultTabIndex() == 1) {
         forceSelectMyTab((UITabBarController *)self);
     }
@@ -119,7 +116,6 @@ static void forceSelectMyTab(UITabBarController *tab) {
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
-        // 延迟执行，确保所有布局完成
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             forceSelectMyTab((UITabBarController *)self);
         });
