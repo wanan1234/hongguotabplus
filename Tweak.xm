@@ -1,5 +1,5 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版（含完整视图层级输出）
+//  HongGuoFullScreen — 诊断版 v2（精确隐藏顶部横幅）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 隐藏顶部（调试中）
 //  诊断日志：进入“我的”页面时自动打印视图树到 Documents/viewHierarchy.log
 // =============================================================
@@ -54,30 +54,27 @@ static void logMyPageViewHierarchy(UIViewController *myVC) {
     dumpViewHierarchy(myVC.view, 0, output);
     [output appendString:@"===== 诊断结束 =====\n"];
 
-    // 写入沙盒 Documents 目录
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *docPath = [paths firstObject];
     NSString *filePath = [docPath stringByAppendingPathComponent:@"viewHierarchy.log"];
     [output writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-
-    // 同时输出到系统日志（便于调试）
     NSLog(@"[HongGuo] 视图层级已保存至: %@", filePath);
 }
 
 // =============================================================
-// 隐藏顶部横幅（基于当前已知类名，但可能不完整）
+// 精确隐藏顶部横幅 + 占位视图 + 滚动归零
 // =============================================================
 static void hideTopBannerInMyPage(UIViewController *myVC) {
     if (!myVC || !isEnabled()) return;
     UIView *rootView = myVC.view;
     if (!rootView) return;
 
-    // 方案一：查找 FQReaderSaaSBaseImageView，高度 > 200，y=0
+    // 1. 查找并隐藏可见的顶部横幅（FQReaderSaaSBaseImageView，y=0，高度>200，hidden=NO）
     UIView *bannerView = nil;
     for (UIView *sub in rootView.subviews) {
         if ([NSStringFromClass([sub class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
             CGRect frame = sub.frame;
-            if (frame.origin.y == 0 && frame.size.height > 200) {
+            if (frame.origin.y == 0 && frame.size.height > 200 && !sub.hidden) {
                 bannerView = sub;
                 break;
             }
@@ -85,9 +82,9 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
     }
     if (bannerView) {
         bannerView.hidden = YES;
-        NSLog(@"[HongGuo] 已隐藏横幅: %@", NSStringFromCGRect(bannerView.frame));
+        NSLog(@"[HongGuo] 已隐藏可见横幅: %@", NSStringFromCGRect(bannerView.frame));
     } else {
-        // 备用：隐藏第一个高度 > 200 且 y=0 的非滚动视图
+        NSLog(@"[HongGuo] 未找到可见横幅，尝试隐藏第一个高度>200的视图");
         for (UIView *sub in rootView.subviews) {
             if (sub.frame.origin.y == 0 && sub.frame.size.height > 200 &&
                 ![sub isKindOfClass:[UIScrollView class]] &&
@@ -99,18 +96,59 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
         }
     }
 
-    // 滚动视图归零
+    // 2. 查找滚动视图 SSMyUser637NestedContainerScrollView
+    UIScrollView *scrollView = nil;
     for (UIView *sub in rootView.subviews) {
         if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
             if ([sub isKindOfClass:[UIScrollView class]]) {
-                UIScrollView *scrollView = (UIScrollView *)sub;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-                    NSLog(@"[HongGuo] 滚动视图偏移已归零");
-                });
+                scrollView = (UIScrollView *)sub;
                 break;
             }
         }
+    }
+
+    if (scrollView) {
+        // 2.1 隐藏滚动内容中的顶部占位视图（高度约91，无文本）
+        for (UIView *sub in scrollView.subviews) {
+            if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollContentView"]) {
+                if (sub.subviews.count > 0) {
+                    UIView *firstChild = sub.subviews[0];
+                    if (firstChild.frame.size.height >= 80 && firstChild.frame.size.height <= 100) {
+                        // 检查是否包含有效文本
+                        BOOL hasText = NO;
+                        for (UIView *gc in firstChild.subviews) {
+                            if ([gc isKindOfClass:[UILabel class]]) {
+                                UILabel *label = (UILabel *)gc;
+                                if (label.text.length > 0 && ![label.text isEqualToString:@"(空)"]) {
+                                    hasText = YES;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!hasText) {
+                            firstChild.hidden = YES;
+                            NSLog(@"[HongGuo] 隐藏滚动内容内顶部占位视图");
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        // 2.2 调整滚动视图的 contentOffset 和 contentInset
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // 归零偏移
+            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
+            // 重置 contentInset 的 top（防止系统自动添加）
+            UIEdgeInsets insets = scrollView.contentInset;
+            if (insets.top != 0) {
+                insets.top = 0;
+                scrollView.contentInset = insets;
+            }
+            NSLog(@"[HongGuo] 滚动视图偏移归零，contentInset.top=0");
+        });
+    } else {
+        NSLog(@"[HongGuo] 未找到滚动视图");
     }
 }
 
@@ -191,7 +229,6 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
     }
 }
 
-// 额外在 viewDidLayoutSubviews 中再诊断一次（确保视图完成布局）
 - (void)viewDidLayoutSubviews {
     %orig;
     if (!isEnabled()) return;
