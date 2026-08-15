@@ -67,8 +67,10 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     if (tabBar.items.count != 2) {
         WriteLog(@"⚠️ tabBar.items 数量不是2，当前: %lu，尝试重新过滤", (unsigned long)tabBar.items.count);
         // 主动过滤 items
-        UITabBarItem *homeItem = vcs[0].tabBarItem;
-        UITabBarItem *myItem = vcs[4].tabBarItem;
+        UIViewController *homeVC = (UIViewController *)vcs[0];
+        UIViewController *myVC = (UIViewController *)vcs[4];
+        UITabBarItem *homeItem = homeVC.tabBarItem;
+        UITabBarItem *myItem = myVC.tabBarItem;
         if (homeItem && myItem) {
             [tabBar setItems:@[homeItem, myItem] animated:NO];
             WriteLog(@"已重新过滤 items");
@@ -98,7 +100,7 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         return;
     }
 
-    UIViewController *targetVC = vcs[realIndex];
+    UIViewController *targetVC = (UIViewController *)vcs[realIndex];
     WriteLog(@"手动切换: 过滤索引 %ld → 真实索引 %ld, 控制器: %@", (long)filteredIndex, (long)realIndex, targetVC);
 
     if (tab.selectedViewController != targetVC) {
@@ -175,8 +177,10 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         WriteLog(@"items 数量不是2，尝试重新过滤");
         NSArray *vcs = tab.viewControllers;
         if (vcs.count >= 5) {
-            UITabBarItem *homeItem = vcs[0].tabBarItem;
-            UITabBarItem *myItem = vcs[4].tabBarItem;
+            UIViewController *homeVC = (UIViewController *)vcs[0];
+            UIViewController *myVC = (UIViewController *)vcs[4];
+            UITabBarItem *homeItem = homeVC.tabBarItem;
+            UITabBarItem *myItem = myVC.tabBarItem;
             if (homeItem && myItem) {
                 [tab.tabBar setItems:@[homeItem, myItem] animated:NO];
                 WriteLog(@"已重新设置 items");
