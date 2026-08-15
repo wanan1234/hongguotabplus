@@ -1,6 +1,5 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（同步高亮）
-//  在 viewWillAppear 中设置 selectedIndex 并同步 tabBar 高亮
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（强制刷新高亮）
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -36,7 +35,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 %end
 
-// 2. 拦截 setSelectedIndex，修正跳转错乱并同步高亮
+// 2. 拦截 setSelectedIndex，修正跳转错乱
 %hook SSTabBarController
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
@@ -49,74 +48,62 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
                 NSInteger myIndex = indexOfMyVC(vcs);
                 if (myIndex != -1) {
                     %orig(myIndex);
-                    // 同步 tabBar 高亮
-                    if (myIndex < tab.tabBar.items.count) {
-                        tab.tabBar.selectedItem = tab.tabBar.items[myIndex];
-                    }
                     return;
                 } else {
                     %orig(0);
-                    if (0 < tab.tabBar.items.count) {
-                        tab.tabBar.selectedItem = tab.tabBar.items[0];
-                    }
                     return;
                 }
             }
         }
     }
     %orig(selectedIndex);
-    // 同步高亮（防止内部状态不一致）
-    if (isEnabled()) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *items = tab.tabBar.items;
-        if (tab.selectedIndex < items.count) {
-            tab.tabBar.selectedItem = items[tab.selectedIndex];
-        }
-    }
-}
-
-// 3. 在 viewWillAppear 中前置设置 selectedIndex 并同步高亮
-- (void)viewWillAppear:(BOOL)animated {
-    if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
-            tab.selectedIndex = myIndex;
-            // 同步 tabBar 高亮
-            NSArray *items = tab.tabBar.items;
-            if (myIndex < items.count) {
-                tab.tabBar.selectedItem = items[myIndex];
-            }
-        }
-    }
-    %orig;
-}
-
-// 4. 在 viewDidAppear 中兜底
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
-            tab.selectedIndex = myIndex;
-            // 同步 tabBar 高亮
-            NSArray *items = tab.tabBar.items;
-            if (myIndex < items.count) {
-                tab.tabBar.selectedItem = items[myIndex];
-            }
-        }
-        // 再强制刷新布局
-        [tab.tabBar setNeedsLayout];
-        [tab.tabBar layoutIfNeeded];
-    }
 }
 %end
 
+// 3. 在 SSRootViewController 的 viewDidAppear 中强制设置
+%hook SSRootViewController
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!isEnabled() || defaultTabIndex() != 1) return;
+
+    // 查找 SSTabBarController
+    UITabBarController *tabController = nil;
+    for (UIViewController *child in self.childViewControllers) {
+        if ([child isKindOfClass:NSClassFromString(@"SSTabBarController")]) {
+            tabController = (UITabBarController *)child;
+            break;
+        }
+    }
+    if (!tabController) return;
+
+    NSArray *vcs = tabController.viewControllers;
+    NSInteger myIndex = indexOfMyVC(vcs);
+    if (myIndex == -1) return;
+
+    // 强制设置 selectedIndex 和 selectedItem
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // 使用 KVC 绕过可能的拦截
+        [tabController setValue:@(myIndex) forKey:@"selectedIndex"];
+        // 同步 tabBar 高亮
+        NSArray *items = tabController.tabBar.items;
+        if (myIndex < items.count) {
+            [tabController.tabBar setSelectedItem:items[myIndex]];
+        }
+        // 强制刷新布局
+        [tabController.tabBar setNeedsLayout];
+        [tabController.tabBar layoutIfNeeded];
+        // 再次确认
+        if (tabController.selectedIndex != myIndex) {
+            tabController.selectedIndex = myIndex;
+        }
+    });
+}
+
+%end
+
 // =============================================================
-// 双指双击菜单（与之前相同）
+// 双指双击菜单（保持不变）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
