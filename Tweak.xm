@@ -1,7 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（文本匹配隐藏 + 强制调整）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 彻底移除顶部横幅
-//  诊断日志保留
+//  HongGuoFullScreen — 纯净版 + TabBar 颜色自适应修复
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 颜色随页面切换
+//  无日志、无额外诊断
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -26,154 +26,31 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// 诊断：递归打印视图层级
+// 获取当前页面背景色（用于 TabBar 背景匹配）
 // =============================================================
-static void dumpViewHierarchy(UIView *view, NSInteger depth, NSMutableString *output) {
-    if (!view) return;
-    NSString *indent = [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0];
-    NSString *classStr = NSStringFromClass([view class]);
-    NSString *frameStr = NSStringFromCGRect(view.frame);
-    NSString *hiddenStr = view.hidden ? @"YES" : @"NO";
-    NSString *text = @"";
-    if ([view isKindOfClass:[UILabel class]]) {
-        text = [(UILabel *)view text] ?: @"";
-    } else if ([view isKindOfClass:[UIButton class]]) {
-        text = [(UIButton *)view titleForState:UIControlStateNormal] ?: @"";
-    }
-    [output appendFormat:@"%@%@ frame=%@ hidden=%@ text=%@\n", indent, classStr, frameStr, hiddenStr, text];
-    for (UIView *sub in view.subviews) {
-        dumpViewHierarchy(sub, depth + 1, output);
-    }
-}
-
-static void logMyPageViewHierarchy(UIViewController *myVC) {
-    if (!myVC) return;
-    NSMutableString *output = [NSMutableString string];
-    [output appendFormat:@"===== 诊断“我的”页面视图层级 =====\n控制器类: %@\nview frame: %@\n",
-     NSStringFromClass([myVC class]), NSStringFromCGRect(myVC.view.frame)];
-    dumpViewHierarchy(myVC.view, 0, output);
-    [output appendString:@"===== 诊断结束 =====\n"];
-
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *docPath = [paths firstObject];
-    NSString *filePath = [docPath stringByAppendingPathComponent:@"viewHierarchy.log"];
-    [output writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    NSLog(@"[HongGuo] 视图层级已保存至: %@", filePath);
+static UIColor *getCurrentPageBackgroundColor(UITabBarController *tab) {
+    UIViewController *selected = tab.selectedViewController;
+    if (!selected) return [UIColor whiteColor];
+    UIColor *color = selected.view.backgroundColor;
+    if (color) return color;
+    CGColorRef layerColor = selected.view.layer.backgroundColor;
+    if (layerColor) return [UIColor colorWithCGColor:layerColor];
+    return [UIColor whiteColor]; // 默认白色
 }
 
 // =============================================================
-// 辅助：递归获取所有子视图
+// 修复 TabBar 颜色（背景色跟随当前页面）
 // =============================================================
-static void getAllSubviews(UIView *view, NSMutableArray *array) {
-    [array addObject:view];
-    for (UIView *sub in view.subviews) {
-        getAllSubviews(sub, array);
+static void fixTabBar(UITabBarController *tab) {
+    if (!tab) return;
+    UITabBar *tabBar = tab.tabBar;
+    UIColor *bgColor = getCurrentPageBackgroundColor(tab);
+    if (bgColor) {
+        tabBar.barTintColor = bgColor;
+        tabBar.translucent = NO;
+        [tabBar setNeedsLayout];
+        [tabBar layoutIfNeeded];
     }
-}
-
-// =============================================================
-// 暴力调整布局（隐藏所有横幅 + 强制移动UICollectionView）
-// =============================================================
-static void hideTopBannerInMyPage(UIViewController *myVC) {
-    if (!myVC || !isEnabled()) return;
-    UIView *rootView = myVC.view;
-    if (!rootView) return;
-
-    // ---- 1. 隐藏所有包含特定文本的视图及其父视图 ----
-    NSMutableArray *allViews = [NSMutableArray array];
-    getAllSubviews(rootView, allViews);
-    for (UIView *view in allViews) {
-        if ([view isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)view;
-            NSString *text = label.text;
-            if ([text containsString:@"爆款"] || [text containsString:@"上新"] || [text containsString:@"娘为小师妹撑腰"]) {
-                // 找到最近的父视图，高度大于100的隐藏
-                UIView *parent = view.superview;
-                while (parent) {
-                    if (parent.frame.size.height > 80 && parent != rootView) {
-                        parent.hidden = YES;
-                        NSLog(@"[HongGuo] 隐藏包含文本的父视图: %@", NSStringFromClass([parent class]));
-                        break;
-                    }
-                    parent = parent.superview;
-                }
-            }
-        }
-    }
-
-    // ---- 2. 隐藏所有高度 > 200 的 FQReaderSaaSBaseImageView ----
-    for (UIView *view in allViews) {
-        if ([NSStringFromClass([view class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
-            if (view.frame.size.height > 200) {
-                view.hidden = YES;
-                NSLog(@"[HongGuo] 隐藏大图: %@", NSStringFromCGRect(view.frame));
-            }
-        }
-    }
-
-    // ---- 3. 查找滚动视图 ----
-    UIScrollView *scrollView = nil;
-    for (UIView *sub in rootView.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
-            if ([sub isKindOfClass:[UIScrollView class]]) {
-                scrollView = (UIScrollView *)sub;
-                break;
-            }
-        }
-    }
-    if (!scrollView) {
-        NSLog(@"[HongGuo] 未找到滚动视图");
-        return;
-    }
-
-    // ---- 4. 强制调整滚动视图的 contentInset 和 offset ----
-    UIEdgeInsets insets = scrollView.contentInset;
-    if (insets.top != 0) {
-        insets.top = 0;
-        scrollView.contentInset = insets;
-        NSLog(@"[HongGuo] 重置 contentInset.top = 0");
-    }
-    [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-
-    // ---- 5. 找到用户信息UICollectionView并强制设y=0 ----
-    for (UIView *sub in scrollView.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollContentView"]) {
-            for (UIView *child in sub.subviews) {
-                if ([child isKindOfClass:[UICollectionView class]]) {
-                    CGRect frame = child.frame;
-                    if (frame.origin.y != 0) {
-                        frame.origin.y = 0;
-                        child.frame = frame;
-                        NSLog(@"[HongGuo] 已设置UICollectionView frame.y = 0");
-                    }
-                    // 同时检查该collectionView的内容偏移是否可能影响
-                    if ([child isKindOfClass:[UIScrollView class]]) {
-                        [(UIScrollView *)child setContentOffset:CGPointMake(0, 0) animated:NO];
-                    }
-                    break;
-                }
-            }
-            break;
-        }
-    }
-
-    // ---- 6. 多次延迟刷新 ----
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-        [scrollView setNeedsLayout];
-        [scrollView layoutIfNeeded];
-        NSLog(@"[HongGuo] 第1次刷新");
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-        [scrollView layoutIfNeeded];
-        NSLog(@"[HongGuo] 第2次刷新");
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
-        [scrollView layoutIfNeeded];
-        NSLog(@"[HongGuo] 第3次刷新");
-    });
 }
 
 // =============================================================
@@ -195,6 +72,7 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
 // =============================================================
 %hook SSTabBarController
 
+// 拦截 setSelectedIndex，修正跳转错乱并修复颜色
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -206,31 +84,24 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
                 NSInteger myIndex = indexOfMyVC(vcs);
                 if (myIndex != -1) {
                     %orig(myIndex);
+                    fixTabBar(tab);
                     return;
                 } else {
                     %orig(0);
+                    fixTabBar(tab);
                     return;
                 }
             }
         }
     }
     %orig(selectedIndex);
-
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
-        UIViewController *selectedVC = tab.selectedViewController;
-        if ([selectedVC.tabBarItem.title isEqualToString:@"我的"]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                hideTopBannerInMyPage(selectedVC);
-                logMyPageViewHierarchy(selectedVC);
-            });
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                hideTopBannerInMyPage(selectedVC);
-            });
-        }
+        fixTabBar(tab);
     }
 }
 
+// viewWillAppear 中设置默认启动页，并立即修复颜色
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -238,41 +109,26 @@ static void hideTopBannerInMyPage(UIViewController *myVC) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
+            fixTabBar(tab);
         }
     }
     %orig;
 }
 
+// viewDidAppear 中再次确保索引正确并修复颜色（防止被重置）
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!isEnabled()) return;
-    UITabBarController *tab = (UITabBarController *)self;
-    UIViewController *selectedVC = tab.selectedViewController;
-    if ([selectedVC.tabBarItem.title isEqualToString:@"我的"]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            hideTopBannerInMyPage(selectedVC);
-            logMyPageViewHierarchy(selectedVC);
-        });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            hideTopBannerInMyPage(selectedVC);
-        });
+    if (isEnabled() && defaultTabIndex() == 1) {
+        UITabBarController *tab = (UITabBarController *)self;
+        NSArray *vcs = tab.viewControllers;
+        NSInteger myIndex = indexOfMyVC(vcs);
+        if (myIndex != -1 && tab.selectedIndex != myIndex) {
+            tab.selectedIndex = myIndex;
+        }
+        fixTabBar(tab);
     }
 }
 
-- (void)viewDidLayoutSubviews {
-    %orig;
-    if (!isEnabled()) return;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        UITabBarController *tab = (UITabBarController *)self;
-        UIViewController *selectedVC = tab.selectedViewController;
-        if ([selectedVC.tabBarItem.title isEqualToString:@"我的"]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                logMyPageViewHierarchy(selectedVC);
-            });
-        }
-    });
-}
 %end
 
 // =============================================================
