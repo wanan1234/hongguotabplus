@@ -25,6 +25,37 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
+// 递归打印视图层级
+static void dumpViewHierarchy(UIView *view, NSInteger depth, NSMutableString *output) {
+    if (!view) return;
+    NSString *indent = [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0];
+    NSString *classStr = NSStringFromClass([view class]);
+    NSString *frameStr = NSStringFromCGRect(view.frame);
+    NSString *text = @"";
+    if ([view isKindOfClass:[UILabel class]]) {
+        text = [(UILabel *)view text] ?: @"";
+    } else if ([view isKindOfClass:[UIButton class]]) {
+        text = [(UIButton *)view titleForState:UIControlStateNormal] ?: @"";
+    }
+    [output appendFormat:@"%@%@ frame=%@ text=%@\n", indent, classStr, frameStr, text];
+    for (UIView *sub in view.subviews) {
+        dumpViewHierarchy(sub, depth + 1, output);
+    }
+}
+
+static void logMyPageViewHierarchy(UIViewController *vc) {
+    NSMutableString *output = [NSMutableString string];
+    [output appendString:@"========== My Page View Hierarchy ==========\n"];
+    dumpViewHierarchy(vc.view, 0, output);
+    WriteLog(@"%@", output); // 也会输出到控制台
+    // 额外写入单独文件便于提取
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *docPath = [paths firstObject];
+    NSString *filePath = [docPath stringByAppendingPathComponent:@"viewHierarchy.log"];
+    [output writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    WriteLog(@"视图层级已保存至: %@", filePath);
+}
+
 // 日志工具（仅保留关键日志）
 static void WriteLog(NSString *format, ...) {
     va_list args;
