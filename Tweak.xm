@@ -1,10 +1,10 @@
 // =============================================================
-//  HongGuoFullScreen — 隐藏“我的”页面顶部 Bar
-//  基于稳定版，增加隐藏 SSMyUser637Bar
+//  HongGuoFullScreen — 纯净版 + 隐藏“我的”顶部横幅
+//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 我的顶部自动隐藏
+//  无日志、无alpha修复
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
-#import <stdarg.h>
 
 static BOOL isEnabled() {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
@@ -25,36 +25,55 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// ---------- 诊断日志 ----------
-static void WriteLog(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
-    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *documentsDirectory = [paths firstObject];
-    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:documentsDirectory]) {
-        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+// =============================================================
+// 隐藏“我的”页面顶部横幅 + 滚动归零（基于视图层级分析）
+// =============================================================
+static void hideTopBannerInMyPage(UIViewController *myVC) {
+    if (!myVC || !isEnabled()) return;
+    UIView *rootView = myVC.view;
+    if (!rootView) return;
+
+    // 1. 查找顶部横幅：FQReaderSaaSBaseImageView，高度 > 200，y=0
+    UIView *bannerView = nil;
+    for (UIView *sub in rootView.subviews) {
+        if ([NSStringFromClass([sub class]) isEqualToString:@"FQReaderSaaSBaseImageView"]) {
+            CGRect frame = sub.frame;
+            if (frame.origin.y == 0 && frame.size.height > 200) {
+                bannerView = sub;
+                break;
+            }
+        }
     }
-    NSDateFormatter *df = [[NSDateFormatter alloc] init];
-    df.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
-    NSString *timestamp = [df stringFromDate:[NSDate date]];
-    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, msg];
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) {
-        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    if (bannerView) {
+        bannerView.hidden = YES;
     } else {
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
+        // 备用：隐藏第一个高度 > 200 且 y=0 的非滚动视图
+        for (UIView *sub in rootView.subviews) {
+            if (sub.frame.origin.y == 0 && sub.frame.size.height > 200 &&
+                ![sub isKindOfClass:[UIScrollView class]] &&
+                ![NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
+                sub.hidden = YES;
+                break;
+            }
+        }
     }
-    NSLog(@"[HongGuo] %@", msg);
+
+    // 2. 查找滚动视图 SSMyUser637NestedContainerScrollView 并归零偏移
+    for (UIView *sub in rootView.subviews) {
+        if ([NSStringFromClass([sub class]) isEqualToString:@"SSMyUser637NestedContainerScrollView"]) {
+            if ([sub isKindOfClass:[UIScrollView class]]) {
+                UIScrollView *scrollView = (UIScrollView *)sub;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
+                });
+                break;
+            }
+        }
+    }
 }
 
 // =============================================================
-// 原有功能：过滤 SSTabBar 的 items
+// Hook SSTabBar — 过滤 items，只保留首页和我的
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
@@ -68,9 +87,11 @@ static void WriteLog(NSString *format, ...) {
 %end
 
 // =============================================================
-// 原有功能：拦截 setSelectedIndex，修正跳转错乱
+// Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
+
+// 拦截 setSelectedIndex，修正跳转错乱
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -91,8 +112,20 @@ static void WriteLog(NSString *format, ...) {
         }
     }
     %orig(selectedIndex);
+
+    // 如果切换后选中的是“我的”，执行隐藏
+    if (isEnabled()) {
+        UITabBarController *tab = (UITabBarController *)self;
+        UIViewController *selectedVC = tab.selectedViewController;
+        if ([selectedVC.tabBarItem.title isEqualToString:@"我的"]) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                hideTopBannerInMyPage(selectedVC);
+            });
+        }
+    }
 }
 
+// viewWillAppear 中前置设置 selectedIndex
 - (void)viewWillAppear:(BOOL)animated {
     if (isEnabled() && defaultTabIndex() == 1) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -105,62 +138,22 @@ static void WriteLog(NSString *format, ...) {
     %orig;
 }
 
+// viewDidAppear 中确保隐藏（首次加载）
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!isEnabled() || defaultTabIndex() != 1) return;
-
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UITabBarController *tab = (UITabBarController *)self;
-            UITabBar *tabBar = tab.tabBar;
-            if (tabBar.alpha < 0.5) {
-                WriteLog(@"fix: tabBar.alpha was %.2f, setting to 1.0", tabBar.alpha);
-                tabBar.alpha = 1.0;
-                [tabBar setNeedsLayout];
-                [tabBar layoutIfNeeded];
-            }
+    if (!isEnabled()) return;
+    UITabBarController *tab = (UITabBarController *)self;
+    UIViewController *selectedVC = tab.selectedViewController;
+    if ([selectedVC.tabBarItem.title isEqualToString:@"我的"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            hideTopBannerInMyPage(selectedVC);
         });
-    });
+    }
 }
 %end
 
 // =============================================================
-// 新增：隐藏“我的”页面顶部的 SSMyUser637Bar
-// =============================================================
-%hook SSMyUser637ViewController
-
-- (void)viewDidLoad {
-    %orig;
-    // 强制转换为 UIViewController * 访问 view
-    UIViewController *vc = (UIViewController *)self;
-    for (UIView *subview in vc.view.subviews) {
-        if ([NSStringFromClass([subview class]) isEqualToString:@"SSMyUser637Bar"]) {
-            WriteLog(@"找到 SSMyUser637Bar，准备隐藏");
-            subview.hidden = YES;
-            subview.alpha = 0.0;
-            break;
-        }
-    }
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    // 再次确保隐藏（可能被系统重新显示）
-    UIViewController *vc = (UIViewController *)self;
-    for (UIView *subview in vc.view.subviews) {
-        if ([NSStringFromClass([subview class]) isEqualToString:@"SSMyUser637Bar"]) {
-            subview.hidden = YES;
-            subview.alpha = 0.0;
-            break;
-        }
-    }
-}
-
-%end
-
-// =============================================================
-// 双指双击菜单（完整保留）
+// 双指双击菜单（保持不变）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -175,11 +168,11 @@ static void showToast(NSString *msg, UIWindow *window) {
 static void showDefaultTabMenu(UIWindow *window) {
     UIViewController *topVC = window.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-    
+
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认打开页面"
                                                                    message:@"选择应用启动时默认进入的页面"
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-    
+
     NSInteger current = defaultTabIndex();
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
@@ -197,7 +190,7 @@ static void showDefaultTabMenu(UIWindow *window) {
         while (top.presentedViewController) top = top.presentedViewController;
         [top presentViewController:restart animated:YES completion:nil];
     }]];
-    
+
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 我的", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
@@ -214,9 +207,9 @@ static void showDefaultTabMenu(UIWindow *window) {
         while (top.presentedViewController) top = top.presentedViewController;
         [top presentViewController:restart animated:YES completion:nil];
     }]];
-    
+
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    
+
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = window;
         alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
@@ -231,7 +224,7 @@ static void showSettingsMenu(UIWindow *window) {
     BOOL enabled = isEnabled();
     NSInteger defaultTab = defaultTabIndex();
     NSString *defaultText = defaultTab == 0 ? @"首页" : @"我的";
-    
+
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简Tab控制"
                                                                    message:[NSString stringWithFormat:@"当前状态：%@\n默认打开：%@", enabled ? @"已开启" : @"已关闭", defaultText]
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
@@ -311,5 +304,4 @@ static void showSettingsMenu(UIWindow *window) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    WriteLog(@"HongGuoFullScreen 加载成功");
 }
