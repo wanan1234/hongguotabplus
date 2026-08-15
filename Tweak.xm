@@ -1,7 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 精简 TabBar + 默认打开页面选择
-//  功能：1. 只保留首页和我的 2. 双指双击开关 3. 默认打开页面选择
-//  稳定版本 2026-08-15
+//  HongGuoFullScreen — 精简 TabBar + 默认打开页面（无延迟跳转）
+//  直接打开默认页面，不经过首页
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -10,7 +9,6 @@ static BOOL isEnabled() {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"HongGuoFullScreenEnabled"];
 }
 
-// 默认打开页面：0=首页，1=我的
 static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
@@ -26,7 +24,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// 1. 过滤 SSTabBar 的 items（只显示首页和我的）
+// 1. 过滤 SSTabBar 的 items
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
@@ -62,14 +60,15 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// 3. 在 viewDidLoad 中设置默认打开页面
+// 3. 在 viewDidLoad 中立即设置默认页面（无延迟）
 - (void)viewDidLoad {
     %orig;
     if (isEnabled()) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // 立即设置，不使用 dispatch_after
+        UITabBarController *tab = (UITabBarController *)self;
+        NSArray *vcs = tab.viewControllers;
+        if (vcs.count > 0) {
             NSInteger defaultIndex = defaultTabIndex();
-            UITabBarController *tab = (UITabBarController *)self;
-            NSArray *vcs = tab.viewControllers;
             if (defaultIndex == 1) {
                 NSInteger myIndex = indexOfMyVC(vcs);
                 if (myIndex != -1) {
@@ -78,13 +77,40 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
             } else {
                 tab.selectedIndex = 0;
             }
-        });
+        }
+    }
+}
+
+// 4. 在 viewWillAppear 中再次确保（保险）
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (isEnabled()) {
+        // 仅在未选中有效页面时修正
+        UITabBarController *tab = (UITabBarController *)self;
+        NSArray *vcs = tab.viewControllers;
+        NSInteger currentIndex = tab.selectedIndex;
+        if (currentIndex < vcs.count) {
+            UIViewController *currentVC = vcs[currentIndex];
+            NSString *title = currentVC.tabBarItem.title;
+            // 如果当前选中的是无效页面（如剧场），则重定向
+            if ([title isEqualToString:@"剧场"] || [title isEqualToString:@"商城"] || [title isEqualToString:@"福利"]) {
+                NSInteger myIndex = indexOfMyVC(vcs);
+                if (myIndex != -1) {
+                    tab.selectedIndex = myIndex;
+                } else {
+                    tab.selectedIndex = 0;
+                }
+            }
+        } else {
+            // 越界则设为首页
+            tab.selectedIndex = 0;
+        }
     }
 }
 %end
 
 // =============================================================
-// 双指双击菜单
+// 双指双击菜单（与之前相同）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
