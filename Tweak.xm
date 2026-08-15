@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 彻底修复 alpha 和背景分割
-//  强制 tabBar.alpha=1，同步 barTintColor
+//  HongGuoFullScreen — 最终稳定版（无黑块，默认打开我的）
+//  强制 tabBar.alpha=1，同步背景色
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -31,9 +31,9 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 
 - (void)setAlpha:(CGFloat)alpha {
     if (isEnabled() && alpha == 0.0) {
-        // 强制设为 1，并同步背景色
-        [self setBarTintColor:[UIColor whiteColor]]; // 根据主界面调整
-        [self setTranslucent:NO];
+        UITabBar *tabBar = (UITabBar *)self;
+        tabBar.barTintColor = [UIColor whiteColor];
+        tabBar.translucent = NO;
         %orig(1.0);
         return;
     }
@@ -42,10 +42,13 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 
 - (void)layoutSubviews {
     %orig;
-    if (isEnabled() && self.alpha == 0.0) {
-        self.alpha = 1.0;
-        [self setBarTintColor:[UIColor whiteColor]];
-        [self setTranslucent:NO];
+    if (isEnabled()) {
+        UITabBar *tabBar = (UITabBar *)self;
+        if (tabBar.alpha == 0.0) {
+            tabBar.alpha = 1.0;
+            tabBar.barTintColor = [UIColor whiteColor];
+            tabBar.translucent = NO;
+        }
     }
 }
 
@@ -53,9 +56,9 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     if (isEnabled() && items.count > 2) {
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
-        // 同步背景色
-        self.barTintColor = [UIColor whiteColor];
-        self.translucent = NO;
+        UITabBar *tabBar = (UITabBar *)self;
+        tabBar.barTintColor = [UIColor whiteColor];
+        tabBar.translucent = NO;
         return;
     }
     %orig(items, animated);
@@ -96,10 +99,11 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
-            // 同步背景色
-            tab.tabBar.barTintColor = [UIColor whiteColor];
-            tab.tabBar.translucent = NO;
-            tab.tabBar.alpha = 1.0;
+            // 同步背景
+            UITabBar *tabBar = tab.tabBar;
+            tabBar.barTintColor = [UIColor whiteColor];
+            tabBar.translucent = NO;
+            tabBar.alpha = 1.0;
         }
     }
     %orig;
@@ -111,7 +115,6 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 
     UITabBarController *tab = (UITabBarController *)self;
     UITabBar *tabBar = tab.tabBar;
-    // 兜底：强制 alpha 和背景
     if (tabBar.alpha != 1.0) {
         tabBar.alpha = 1.0;
     }
@@ -149,6 +152,7 @@ static void showDefaultTabMenu(UIWindow *window) {
     [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
+        // 询问重启
         UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
                                                                          message:@"设置已保存，需要重启应用才能生效，是否立即重启？"
                                                                   preferredStyle:UIAlertControllerStyleAlert];
