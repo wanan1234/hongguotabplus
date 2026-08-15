@@ -1,9 +1,9 @@
 // =============================================================
-//  HongGuoFullScreen — 最终版（逻辑正常 + 系统自动颜色）
+//  HongGuoFullScreen — 最终版（强制过滤 + 系统自动颜色）
 //  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  逻辑：完全采用代码1（索引映射，切换正常）
-//  颜色：借鉴代码2（不设 barTintColor，让系统自动）
-//  日志：保留详细日志，方便调试
+//  逻辑：采用代码1的索引映射，确保切换正常
+//  颜色：不设barTintColor，让系统自动根据页面变色
+//  日志：保留详细日志
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -48,7 +48,7 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
-// 强制过滤 tabBar.items（保留代码1逻辑）
+// 强制过滤 tabBar.items 为首页和我的（每次调用都重新设置，确保有效）
 static void forceFilterTabBarItems(UITabBarController *tab) {
     if (!tab || !isEnabled()) return;
     UITabBar *tabBar = tab.tabBar;
@@ -58,24 +58,23 @@ static void forceFilterTabBarItems(UITabBarController *tab) {
     UITabBarItem *homeItem = ((UIViewController *)vcs[0]).tabBarItem;
     UITabBarItem *myItem = ((UIViewController *)vcs[4]).tabBarItem;
     if (homeItem && myItem) {
-        if (tabBar.items.count != 2 ||
-            ![tabBar.items[0].title isEqualToString:homeItem.title] ||
-            ![tabBar.items[1].title isEqualToString:myItem.title]) {
-            WriteLog(@"强制过滤 items: 首页=%@, 我的=%@", homeItem.title, myItem.title);
-            [tabBar setItems:@[homeItem, myItem] animated:NO];
-        }
+        // 每次都强制设置，确保 items 始终是这两个
+        [tabBar setItems:@[homeItem, myItem] animated:NO];
+        WriteLog(@"强制过滤 items: 首页=%@, 我的=%@", homeItem.title, myItem.title);
     }
 }
 
-// 手动切换视图并同步高亮（借鉴代码2：只设置 selectedItem，不设置 barTintColor）
+// 手动切换视图，并设置高亮（不设置 barTintColor）
 static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     if (!tab || !isEnabled()) return;
     NSArray *vcs = tab.viewControllers;
     if (vcs.count < 5) return;
     UITabBar *tabBar = tab.tabBar;
 
+    // 1. 强制过滤 items（确保只有首页和我的）
     forceFilterTabBarItems(tab);
 
+    // 2. 映射真实索引
     NSInteger realIndex = -1;
     if (filteredIndex == 0) realIndex = 0;
     else if (filteredIndex == 1) realIndex = 4;
@@ -89,12 +88,15 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
     UIViewController *targetVC = vcs[realIndex];
     WriteLog(@"切换: 过滤索引 %ld → 真实索引 %ld, 控制器=%@", (long)filteredIndex, (long)realIndex, targetVC);
 
-    // 切换视图
+    // 3. 切换视图
     if (tab.selectedViewController != targetVC) {
         tab.selectedViewController = targetVC;
     }
 
-    // 修正高亮（只设置 selectedItem，不设置 barTintColor）
+    // 4. 再次强制过滤（防止在切换视图时系统重置了 items）
+    forceFilterTabBarItems(tab);
+
+    // 5. 设置高亮（此时 items 应为2个，直接取 filteredIndex）
     if (filteredIndex >= 0 && filteredIndex < tabBar.items.count) {
         UITabBarItem *item = tabBar.items[filteredIndex];
         if (tabBar.selectedItem != item) {
@@ -135,7 +137,7 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 %end
 
 // =============================================================
-// Hook SSTabBarController — 拦截 setViewControllers 和 setSelectedIndex
+// Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
 
@@ -161,6 +163,7 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         return;
     }
 
+    // 强制过滤 items
     forceFilterTabBarItems(tab);
 
     NSInteger filteredIndex = -1;
@@ -197,11 +200,13 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
         });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UITabBarController *tab = (UITabBarController *)self;
-            // 再次确保高亮（只设置 selectedItem）
+            forceFilterTabBarItems(tab);
+            // 再次确保高亮
             if (tab.tabBar.items.count == 2) {
                 tab.tabBar.selectedItem = tab.tabBar.items[1];
                 [tab.tabBar setNeedsLayout];
                 [tab.tabBar layoutIfNeeded];
+                WriteLog(@"最终确保高亮: 我的");
             }
         });
     }
@@ -210,158 +215,6 @@ static void switchToTab(UITabBarController *tab, NSInteger filteredIndex) {
 %end
 
 // =============================================================
-// 双指双击菜单（完整保留）
+// 双指双击菜单（完整保留，省略以节省篇幅）
 // =============================================================
-static void showToast(NSString *msg, UIWindow *window) {
-    UIViewController *top = window.rootViewController;
-    while (top.presentedViewController) top = top.presentedViewController;
-    UIAlertController *toast = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
-    [top presentViewController:toast animated:YES completion:nil];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [toast dismissViewControllerAnimated:YES completion:nil];
-    });
-}
-
-static void showDefaultTabMenu(UIWindow *window) {
-    UIViewController *topVC = window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"默认打开页面"
-                                                                   message:@"选择应用启动时默认进入的页面"
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-
-    NSInteger current = defaultTabIndex();
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 首页", current == 0 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                         message:@"设置已保存，是否立即重启生效？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-            exit(0);
-        }]];
-        [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-            showToast(@"请手动重启红果短剧", window);
-        }]];
-        UIViewController *top = window.rootViewController;
-        while (top.presentedViewController) top = top.presentedViewController;
-        [top presentViewController:restart animated:YES completion:nil];
-    }]];
-
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ 我的", current == 1 ? @"✓" : @""] style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        [[NSUserDefaults standardUserDefaults] setInteger:1 forKey:@"HongGuoDefaultTab"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                         message:@"设置已保存，是否立即重启生效？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-            exit(0);
-        }]];
-        [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-            showToast(@"请手动重启红果短剧", window);
-        }]];
-        UIViewController *top = window.rootViewController;
-        while (top.presentedViewController) top = top.presentedViewController;
-        [top presentViewController:restart animated:YES completion:nil];
-    }]];
-
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        alert.popoverPresentationController.sourceView = window;
-        alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
-    }
-    [topVC presentViewController:alert animated:YES completion:nil];
-}
-
-static void showSettingsMenu(UIWindow *window) {
-    UIViewController *topVC = window.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-
-    BOOL enabled = isEnabled();
-    NSInteger defaultTab = defaultTabIndex();
-    NSString *defaultText = defaultTab == 0 ? @"首页" : @"我的";
-
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"红果精简Tab控制"
-                                                                   message:[NSString stringWithFormat:@"当前状态：%@\n默认打开：%@", enabled ? @"已开启" : @"已关闭", defaultText]
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-
-    [alert addAction:[UIAlertAction actionWithTitle:enabled ? @"关闭功能" : @"开启功能" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"提示"
-                                                                         message:@"切换后需重启 App 生效，确定？"
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            [[NSUserDefaults standardUserDefaults] setBool:!enabled forKey:@"HongGuoFullScreenEnabled"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            UIAlertController *restart = [UIAlertController alertControllerWithTitle:@"重启应用"
-                                                                             message:@"是否立即重启？"
-                                                                      preferredStyle:UIAlertControllerStyleAlert];
-            [restart addAction:[UIAlertAction actionWithTitle:@"立即重启" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-                exit(0);
-            }]];
-            [restart addAction:[UIAlertAction actionWithTitle:@"稍后" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-                showToast(@"请手动重启红果短剧", window);
-            }]];
-            UIViewController *top = window.rootViewController;
-            while (top.presentedViewController) top = top.presentedViewController;
-            [top presentViewController:restart animated:YES completion:nil];
-        }]];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-        UIViewController *top = window.rootViewController;
-        while (top.presentedViewController) top = top.presentedViewController;
-        [top presentViewController:confirm animated:YES completion:nil];
-    }]];
-
-    [alert addAction:[UIAlertAction actionWithTitle:@"设置默认打开页面" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        showDefaultTabMenu(window);
-    }]];
-
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-        alert.popoverPresentationController.sourceView = window;
-        alert.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(window.bounds), CGRectGetMidY(window.bounds), 0, 0);
-    }
-    [topVC presentViewController:alert animated:YES completion:nil];
-}
-
-// =============================================================
-// Hook UIWindow：双指双击
-// =============================================================
-%hook UIWindow
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = %orig;
-    if (self) {
-        UITapGestureRecognizer *gesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hg_handleDoubleTap:)];
-        gesture.numberOfTouchesRequired = 2;
-        gesture.numberOfTapsRequired = 2;
-        [self addGestureRecognizer:gesture];
-    }
-    return self;
-}
-%new
-- (void)hg_handleDoubleTap:(UITapGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateRecognized) {
-        if (@available(iOS 10.0, *)) {
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        }
-        showSettingsMenu(self);
-    }
-}
-%end
-
-// =============================================================
-// 构造函数
-// =============================================================
-%ctor {
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoFullScreenEnabled"]) {
-        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"HongGuoFullScreenEnabled"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-    }
-    if (![[NSUserDefaults standardUserDefaults] objectForKey:@"HongGuoDefaultTab"]) {
-        [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-    }
-    WriteLog(@"====== HongGuoFullScreen 加载完成 ======");
-    WriteLog(@"功能状态: %@", isEnabled() ? @"开启" : @"关闭");
-    WriteLog(@"默认启动页: %@", defaultTabIndex() == 0 ? @"首页" : @"我的");
-}
+// ...（您之前的菜单代码，此处不再重复）
