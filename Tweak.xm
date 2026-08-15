@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 最终可编译版
-//  通过 UITabBar 强制 alpha=1，修正跳转错乱
+//  HongGuoFullScreen — 最终版（刷新背景视图，不碰 alpha）
+//  通过刷新 _UIBarBackground 解决黑块问题
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -24,32 +24,50 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     return -1;
 }
 
-// =============================================================
-// Hook UITabBar（红果的 CYLTabBar 是 UITabBar 的子类）
-// =============================================================
-%hook UITabBar
-
-- (void)setAlpha:(CGFloat)alpha {
-    if (isEnabled() && alpha == 0.0) {
-        // 强制设为 1
-        %orig(1.0);
-        return;
+// 强制刷新 tabBar 背景视图
+static void refreshTabBarBackground(UITabBar *tabBar) {
+    if (!tabBar) return;
+    
+    // 方法1：通过 KVC 获取 _backgroundView
+    id backgroundView = [tabBar valueForKey:@"_backgroundView"];
+    if (backgroundView && [backgroundView respondsToSelector:@selector(setNeedsDisplay)]) {
+        [backgroundView performSelector:@selector(setNeedsDisplay)];
+        // 如果背景视图是 UIVisualEffectView，尝试刷新其 effect
+        if ([backgroundView isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *effectView = (UIVisualEffectView *)backgroundView;
+            UIVisualEffect *currentEffect = effectView.effect;
+            if (currentEffect) {
+                effectView.effect = nil;
+                effectView.effect = currentEffect;
+            }
+        }
     }
-    %orig(alpha);
+    
+    // 方法2：重新设置 barTintColor（触发重绘）
+    UIColor *currentColor = tabBar.barTintColor;
+    if (currentColor) {
+        tabBar.barTintColor = nil;
+        tabBar.barTintColor = currentColor;
+    }
+    
+    // 方法3：强制布局
+    [tabBar setNeedsLayout];
+    [tabBar layoutIfNeeded];
 }
 
-- (void)layoutSubviews {
-    %orig;
-    if (isEnabled() && self.alpha == 0.0) {
-        self.alpha = 1.0;
-    }
-}
+// =============================================================
+// Hook SSTabBar（过滤 items，不改 alpha）
+// =============================================================
+%hook SSTabBar
 
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
     if (isEnabled() && items.count > 2) {
-        // 只保留首页和我的（索引0和4）
         NSArray *filtered = @[items[0], items[4]];
         %orig(filtered, animated);
+        // 过滤后刷新背景
+        dispatch_async(dispatch_get_main_queue(), ^{
+            refreshTabBarBackground(self);
+        });
         return;
     }
     %orig(items, animated);
@@ -57,17 +75,17 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 %end
 
 // =============================================================
-// Hook SSTabBarController（通过 UITabBarController 转换）
+// Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
 
 - (void)viewDidLoad {
     %orig;
-    if (!isEnabled()) return;
-    UITabBarController *tab = (UITabBarController *)self;
-    // 初始化 selectedIndex
-    if (tab.selectedIndex == NSNotFound || tab.selectedIndex >= tab.viewControllers.count) {
-        tab.selectedIndex = 0;
+    if (isEnabled()) {
+        // 初始化 selectedIndex
+        if (self.selectedIndex >= self.viewControllers.count) {
+            self.selectedIndex = 0;
+        }
     }
 }
 
@@ -78,6 +96,8 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         NSInteger myIndex = indexOfMyVC(vcs);
         if (myIndex != -1 && tab.selectedIndex != myIndex) {
             tab.selectedIndex = myIndex;
+            // 设置后立即刷新背景
+            refreshTabBarBackground(tab.tabBar);
         }
     }
     %orig;
@@ -86,27 +106,51 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (!isEnabled()) return;
-    UITabBarController *tab = (UITabBarController *)self;
-    if (tab.tabBar.alpha == 0.0) {
-        tab.tabBar.alpha = 1.0;
-    }
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // 延迟一帧，确保所有视图已渲染
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UITabBarController *tab = (UITabBarController *)self;
+            
+            // 确保默认页正确
+            if (defaultTabIndex() == 1) {
+                NSInteger myIndex = indexOfMyVC(tab.viewControllers);
+                if (myIndex != -1 && tab.selectedIndex != myIndex) {
+                    tab.selectedIndex = myIndex;
+                }
+            }
+            
+            // 强制刷新背景视图
+            refreshTabBarBackground(tab.tabBar);
+            
+            // 再次延迟刷新，彻底解决黑块
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                refreshTabBarBackground(tab.tabBar);
+            });
+        });
+    });
 }
 
-// 拦截 setSelectedIndex 修正跳转
+// 拦截 setSelectedIndex — 修正跳转错乱
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
         NSArray *vcs = tab.viewControllers;
+        
         if (selectedIndex >= vcs.count) {
             %orig(0);
             return;
         }
+        
         UIViewController *targetVC = vcs[selectedIndex];
         NSString *title = targetVC.tabBarItem.title;
         if ([title isEqualToString:@"剧场"]) {
             NSInteger myIndex = indexOfMyVC(vcs);
             if (myIndex != -1) {
                 %orig(myIndex);
+                // 刷新背景
+                refreshTabBarBackground(tab.tabBar);
                 return;
             } else {
                 %orig(0);
@@ -115,6 +159,11 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         }
     }
     %orig(selectedIndex);
+    // 每次切换后刷新背景
+    if (isEnabled()) {
+        UITabBarController *tab = (UITabBarController *)self;
+        refreshTabBarBackground(tab.tabBar);
+    }
 }
 %end
 
