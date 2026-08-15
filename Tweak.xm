@@ -1,12 +1,13 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版（提取日志，不猜测）
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单 + 详细日志
-//  日志路径：沙盒 Documents/HongGuo.log
+//  HongGuoFullScreen — 诊断版（保留所有功能+日志）
+//  功能：精简Tab栏（首页、我的）+ 默认启动页 + 双指双击菜单
+//  诊断：记录每次 selectedIndex 变化、视图切换、TabBar 状态
+//  日志路径：Documents/HongGuo.log
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 
-// ---------- 日志工具 ----------
+// ---------- 日志函数 ----------
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -14,12 +15,12 @@ static void WriteLog(NSString *format, ...) {
     va_end(args);
 
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *docPath = [paths firstObject];
-    NSString *logPath = [docPath stringByAppendingPathComponent:@"HongGuo.log"];
+    NSString *documentsDirectory = [paths firstObject];
+    NSString *logPath = [documentsDirectory stringByAppendingPathComponent:@"HongGuo.log"];
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:docPath]) {
-        [fm createDirectoryAtPath:docPath withIntermediateDirectories:YES attributes:nil error:nil];
+    if (![fm fileExistsAtPath:documentsDirectory]) {
+        [fm createDirectoryAtPath:documentsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
     }
 
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
@@ -35,7 +36,7 @@ static void WriteLog(NSString *format, ...) {
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
-    NSLog(@"[HongGuo] %@", msg);
+    NSLog(@"[HongGuo] %@", msg); // 也输出到控制台
 }
 
 static BOOL isEnabled() {
@@ -46,16 +47,9 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
-// 获取“我的”真实索引（动态查找）
-static NSInteger indexOfMyVC(NSArray *vcs) {
-    for (NSInteger i = 0; i < vcs.count; i++) {
-        UIViewController *vc = vcs[i];
-        NSString *title = vc.tabBarItem.title;
-        if ([title isEqualToString:@"我的"]) {
-            return i;
-        }
-    }
-    return -1;
+// 获取“我的”在原始 viewControllers 中的真实索引（固定为4）
+static NSInteger myRealIndex() {
+    return 4;
 }
 
 // 获取当前页面背景色
@@ -76,12 +70,12 @@ static void syncTabBarAppearance(UITabBarController *tab) {
     UIViewController *selected = tab.selectedViewController;
     if (!selected) return;
 
+    // 高亮匹配
     NSString *title = selected.tabBarItem.title;
     for (UITabBarItem *item in tabBar.items) {
         if ([item.title isEqualToString:title]) {
             if (tabBar.selectedItem != item) {
                 tabBar.selectedItem = item;
-                WriteLog(@"高亮修正: 选中 item 标题=%@", item.title);
             }
             break;
         }
@@ -91,7 +85,6 @@ static void syncTabBarAppearance(UITabBarController *tab) {
     if (bgColor) {
         tabBar.barTintColor = bgColor;
         tabBar.translucent = NO;
-        WriteLog(@"颜色设置: barTintColor=%@", bgColor);
     }
 
     [tabBar setNeedsLayout];
@@ -99,34 +92,16 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 }
 
 // =============================================================
-// Hook SSTabBar — 过滤 items 并记录日志
+// Hook SSTabBar — 只过滤 items
 // =============================================================
 %hook SSTabBar
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    NSMutableArray *titles = [NSMutableArray array];
-    for (UITabBarItem *item in items) {
-        [titles addObject:item.title ?: @"(nil)"];
-    }
-    WriteLog(@"SSTabBar setItems 原始: %@", [titles componentsJoinedByString:@", "]);
-
+    WriteLog(@"SSTabBar setItems 被调用，原始 items 数量: %lu", (unsigned long)items.count);
     if (isEnabled() && items.count > 2) {
-        // 动态查找“我的”和“首页”
-        NSInteger homeIdx = 0;
-        NSInteger myIdx = -1;
-        for (NSInteger i = 0; i < items.count; i++) {
-            if ([items[i].title isEqualToString:@"首页"]) homeIdx = i;
-            if ([items[i].title isEqualToString:@"我的"]) myIdx = i;
-        }
-        if (myIdx == -1) {
-            WriteLog(@"错误: 未找到‘我的’item，保留全部");
-            %orig(items, animated);
-            return;
-        }
-        NSArray *filtered = @[items[homeIdx], items[myIdx]];
-        WriteLog(@"过滤后 items: %@, %@", [filtered[0] title], [filtered[1] title]);
+        NSArray *filtered = @[items[0], items[4]];
+        WriteLog(@"过滤后 items 数量: %lu (首页: %@, 我的: %@)", (unsigned long)filtered.count, items[0].title, items[4].title);
         %orig(filtered, animated);
-
-        // 如果默认是我的，切换
+        // 如果默认是我的，强制切换
         if (defaultTabIndex() == 1) {
             UIResponder *responder = (UIResponder *)self;
             while (responder && ![responder isKindOfClass:[UITabBarController class]]) {
@@ -134,7 +109,7 @@ static void syncTabBarAppearance(UITabBarController *tab) {
             }
             if ([responder isKindOfClass:[UITabBarController class]]) {
                 UITabBarController *tab = (UITabBarController *)responder;
-                WriteLog(@"默认启动我的，设置 selectedIndex=1");
+                WriteLog(@"setItems 后强制设置 selectedIndex = 1");
                 tab.selectedIndex = 1;
             }
         }
@@ -145,17 +120,22 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 %end
 
 // =============================================================
-// Hook SSTabBarController — 完全接管切换，记录日志
+// Hook SSTabBarController — 完全接管切换 + 日志
 // =============================================================
 %hook SSTabBarController
 
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     UITabBarController *tab = (UITabBarController *)self;
     UITabBar *tabBar = tab.tabBar;
-    WriteLog(@"setSelectedIndex 传入: %ld, 当前 items 数: %lu", (long)selectedIndex, (unsigned long)tabBar.items.count);
+    WriteLog(@"===== setSelectedIndex 被调用 =====");
+    WriteLog(@"传入 selectedIndex = %ld", (long)selectedIndex);
+    WriteLog(@"当前 viewControllers 数量: %lu", (unsigned long)tab.viewControllers.count);
+    WriteLog(@"当前 tabBar.items 数量: %lu", (unsigned long)tabBar.items.count);
+    WriteLog(@"当前 selectedViewController: %@", tab.selectedViewController);
+    WriteLog(@"当前 selectedIndex (系统): %ld", (long)tab.selectedIndex);
 
     if (!isEnabled() || tabBar.items.count != 2) {
-        WriteLog(@"未启用过滤或未过滤，走原始");
+        WriteLog(@"功能未开启或未过滤，走原始逻辑");
         %orig(selectedIndex);
         if (isEnabled()) syncTabBarAppearance(tab);
         return;
@@ -165,79 +145,83 @@ static void syncTabBarAppearance(UITabBarController *tab) {
     NSInteger realIndex = -1;
     NSInteger filteredIndex = -1;
 
-    // 获取“我的”真实索引
-    NSInteger myRealIdx = indexOfMyVC(tab.viewControllers);
-    WriteLog(@"我的真实索引: %ld", (long)myRealIdx);
-
-    // 判断传入的 selectedIndex 是过滤索引还是真实索引
-    if (selectedIndex < tabBar.items.count) {
+    // 判断传入索引含义
+    if (selectedIndex < 2) {
         // 过滤索引
         filteredIndex = selectedIndex;
         if (selectedIndex == 0) {
-            realIndex = 0; // 首页
+            realIndex = 0;
+            WriteLog(@"识别为过滤索引 0 → 真实索引 0 (首页)");
         } else if (selectedIndex == 1) {
-            realIndex = myRealIdx;
+            realIndex = myRealIndex();
+            WriteLog(@"识别为过滤索引 1 → 真实索引 %ld (我的)", (long)realIndex);
         }
-        WriteLog(@"传入的是过滤索引 %ld -> 真实索引 %ld", (long)filteredIndex, (long)realIndex);
     } else {
         // 真实索引
         if (selectedIndex == 0) {
             filteredIndex = 0;
             realIndex = 0;
-        } else if (selectedIndex == myRealIdx) {
+            WriteLog(@"识别为真实索引 0 → 过滤索引 0 (首页)");
+        } else if (selectedIndex == myRealIndex()) {
             filteredIndex = 1;
             realIndex = selectedIndex;
+            WriteLog(@"识别为真实索引 %ld → 过滤索引 1 (我的)", (long)realIndex);
         } else {
-            // 其他真实索引（如剧场）→ 重定向到首页
+            // 其他真实索引（剧场等）→ 重定向到首页
             filteredIndex = 0;
             realIndex = 0;
-            WriteLog(@"传入其他真实索引 %ld，重定向到首页", (long)selectedIndex);
+            WriteLog(@"识别为其他真实索引 %ld → 重定向到首页 (过滤索引 0)", (long)selectedIndex);
         }
     }
 
     if (realIndex < 0 || realIndex >= tab.viewControllers.count) {
+        WriteLog(@"⚠️ 真实索引无效，回退到 0");
         realIndex = 0;
         filteredIndex = 0;
-        WriteLog(@"索引修正: 设为首页");
     }
 
     UIViewController *targetVC = tab.viewControllers[realIndex];
-    WriteLog(@"切换视图: %@ (真实索引 %ld)", targetVC.tabBarItem.title, (long)realIndex);
+    WriteLog(@"最终决定切换到真实索引 %ld, 控制器: %@", (long)realIndex, targetVC);
 
+    // 1. 切换视图
     if (tab.selectedViewController != targetVC) {
         tab.selectedViewController = targetVC;
+        WriteLog(@"视图已切换");
+    } else {
+        WriteLog(@"视图未变化");
     }
 
-    // 修正高亮
+    // 2. 修正高亮
     if (filteredIndex >= 0 && filteredIndex < tabBar.items.count) {
-        UITabBarItem *targetItem = tabBar.items[filteredIndex];
-        if (tabBar.selectedItem != targetItem) {
-            tabBar.selectedItem = targetItem;
-            WriteLog(@"设置高亮 item: %@", targetItem.title);
+        UITabBarItem *item = tabBar.items[filteredIndex];
+        WriteLog(@"设置高亮 item: %@ (过滤索引 %ld)", item.title, (long)filteredIndex);
+        if (tabBar.selectedItem != item) {
+            tabBar.selectedItem = item;
         }
     }
 
+    // 3. 同步颜色
     syncTabBarAppearance(tab);
-    WriteLog(@"切换完成，当前 selectedViewController=%@, selectedItem=%@",
-              tab.selectedViewController.tabBarItem.title,
-              tabBar.selectedItem.title);
+    WriteLog(@"颜色同步完成，barTintColor: %@", tabBar.barTintColor);
+    WriteLog(@"===== setSelectedIndex 处理结束 =====");
 }
 
-// viewWillAppear
+// viewWillAppear 中设置默认启动页
 - (void)viewWillAppear:(BOOL)animated {
+    WriteLog(@"viewWillAppear 调用");
     if (isEnabled() && defaultTabIndex() == 1) {
-        WriteLog(@"viewWillAppear: 设置 selectedIndex=1");
+        WriteLog(@"默认启动是我的，设置 selectedIndex = 1");
         ((UITabBarController *)self).selectedIndex = 1;
     }
     %orig;
 }
 
-// viewDidAppear
+// viewDidAppear 中再次确保
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isEnabled() && defaultTabIndex() == 1) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            WriteLog(@"viewDidAppear 延迟: 设置 selectedIndex=1");
+            WriteLog(@"viewDidAppear 延迟确保 selectedIndex = 1");
             ((UITabBarController *)self).selectedIndex = 1;
         });
     }
@@ -246,7 +230,7 @@ static void syncTabBarAppearance(UITabBarController *tab) {
 %end
 
 // =============================================================
-// 双指双击菜单（完整版）
+// 双指双击菜单（完整保留）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
@@ -397,5 +381,7 @@ static void showSettingsMenu(UIWindow *window) {
         [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"HongGuoDefaultTab"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    WriteLog(@"=== HongGuoFullScreen 初始化完成 ===");
+    WriteLog(@"====== HongGuoFullScreen 加载完成 ======");
+    WriteLog(@"功能状态: %@", isEnabled() ? @"开启" : @"关闭");
+    WriteLog(@"默认启动页: %@", defaultTabIndex() == 0 ? @"首页" : @"我的");
 }
