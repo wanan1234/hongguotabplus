@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 诊断版（Hook UITabBar，记录关键变化）
-//  双指双击查看日志
+//  HongGuoFullScreen — 诊断版（只记录，不修改）
+//  使用强制类型转换和KVC，确保编译通过
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -37,6 +37,7 @@ static void WriteLog(NSString *format, ...) {
     NSLog(@"[HongGuo-Diag] %@", msg);
 }
 
+// ---------- 记录 tabBar 状态 ----------
 static void logTabBarState(UITabBar *tabBar, NSString *tag) {
     if (!tabBar) {
         WriteLog(@"%@: tabBar is nil", tag);
@@ -57,7 +58,25 @@ static void logTabBarState(UITabBar *tabBar, NSString *tag) {
     WriteLog(@"  layer.opacity: %.3f", tabBar.layer.opacity);
     WriteLog(@"  layer.hidden: %d", tabBar.layer.hidden);
     
-    // 遍历子视图
+    // 使用 KVC 获取 _backgroundView
+    id backgroundView = [tabBar valueForKey:@"_backgroundView"];
+    if (backgroundView) {
+        WriteLog(@"  _backgroundView: %@", NSStringFromClass([backgroundView class]));
+        WriteLog(@"    frame: %@", NSStringFromCGRect([backgroundView frame]));
+        WriteLog(@"    alpha: %.3f", [backgroundView alpha]);
+        WriteLog(@"    hidden: %d", [backgroundView isHidden]);
+        // 使用 KVC 获取 backgroundColor，避免类型问题
+        UIColor *bgColor = [backgroundView valueForKey:@"backgroundColor"];
+        WriteLog(@"    backgroundColor: %@", bgColor ?: @"nil");
+        WriteLog(@"    layer.backgroundColor: %@", [backgroundView layer].backgroundColor ? [UIColor colorWithCGColor:[backgroundView layer].backgroundColor] : @"nil");
+        WriteLog(@"    layer.opacity: %.3f", [backgroundView layer].opacity);
+        if ([backgroundView isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *effectView = (UIVisualEffectView *)backgroundView;
+            WriteLog(@"    effect: %@", effectView.effect ? @"exists" : @"nil");
+        }
+    }
+    
+    WriteLog(@"  subviews count: %lu", (unsigned long)tabBar.subviews.count);
     for (UIView *sub in tabBar.subviews) {
         WriteLog(@"    sub: %@ frame=%@ alpha=%.3f hidden=%d bgColor=%@", 
                  NSStringFromClass([sub class]), 
@@ -83,48 +102,43 @@ static void logControllerState(UITabBarController *tab, NSString *tag) {
 }
 
 // =============================================================
-// Hook UITabBar（覆盖所有子类，包括 CYLTabBar）
+// Hook UITabBar（覆盖所有子类，包括 CYLTabBar 和 SSTabBar）
 // =============================================================
 %hook UITabBar
 
-- (void)setAlpha:(CGFloat)alpha {
-    WriteLog(@"[UITabBar setAlpha] %.3f -> %.3f", self.alpha, alpha);
-    %orig(alpha);
-    logTabBarState(self, @"after setAlpha");
-}
-
-- (void)setHidden:(BOOL)hidden {
-    WriteLog(@"[UITabBar setHidden] %d -> %d", self.hidden, hidden);
-    %orig(hidden);
-    logTabBarState(self, @"after setHidden");
-}
-
-- (void)setBarTintColor:(UIColor *)barTintColor {
-    WriteLog(@"[UITabBar setBarTintColor] %@ -> %@", self.barTintColor, barTintColor);
-    %orig(barTintColor);
-    logTabBarState(self, @"after setBarTintColor");
-}
-
 - (void)layoutSubviews {
     %orig;
+    // 检测 alpha 变化
     static CGFloat lastAlpha = -1;
     if (fabs(self.alpha - lastAlpha) > 0.001) {
         lastAlpha = self.alpha;
-        WriteLog(@"[UITabBar layoutSubviews] alpha changed to %.3f", self.alpha);
+        WriteLog(@"[UITabBar layoutSubviews] alpha changed to %.3f (class=%@)", self.alpha, NSStringFromClass([self class]));
         logTabBarState(self, @"layoutSubviews");
     }
 }
 
 - (void)setItems:(NSArray *)items animated:(BOOL)animated {
-    WriteLog(@"[UITabBar setItems] count: %lu -> %lu", (unsigned long)self.items.count, (unsigned long)items.count);
+    WriteLog(@"[UITabBar setItems] count: %lu -> %lu (class=%@)", (unsigned long)self.items.count, (unsigned long)items.count, NSStringFromClass([self class]));
     %orig(items, animated);
     logTabBarState(self, @"after setItems");
 }
 
-- (void)didMoveToWindow {
-    %orig;
-    WriteLog(@"[UITabBar didMoveToWindow] window: %@", self.window ? @"exists" : @"nil");
-    logTabBarState(self, @"didMoveToWindow");
+- (void)setHidden:(BOOL)hidden {
+    WriteLog(@"[UITabBar setHidden] %d -> %d (class=%@)", self.hidden, hidden, NSStringFromClass([self class]));
+    %orig(hidden);
+    logTabBarState(self, @"after setHidden");
+}
+
+- (void)setBarTintColor:(UIColor *)barTintColor {
+    WriteLog(@"[UITabBar setBarTintColor] %@ -> %@ (class=%@)", self.barTintColor, barTintColor, NSStringFromClass([self class]));
+    %orig(barTintColor);
+    logTabBarState(self, @"after setBarTintColor");
+}
+
+- (void)setAlpha:(CGFloat)alpha {
+    WriteLog(@"[UITabBar setAlpha] %.3f -> %.3f (class=%@)", self.alpha, alpha, NSStringFromClass([self class]));
+    %orig(alpha);
+    logTabBarState(self, @"after setAlpha");
 }
 
 %end
@@ -169,13 +183,16 @@ static void logControllerState(UITabBarController *tab, NSString *tag) {
 %end
 
 // =============================================================
-// Hook AWEUIThemeManager（动态获取类）
+// Hook AWEUIThemeManager（用 KVC 获取属性）
 // =============================================================
 %hook AWEUIThemeManager
 
 - (void)setIsLightTheme:(BOOL)isLightTheme {
-    WriteLog(@"[AWEUIThemeManager setIsLightTheme] %d -> %d", self.isLightTheme, isLightTheme);
+    // 获取旧值
+    NSNumber *oldValue = [self valueForKey:@"isLightTheme"];
+    WriteLog(@"[AWEUIThemeManager setIsLightTheme] %d -> %d", oldValue ? [oldValue boolValue] : -1, isLightTheme);
     %orig(isLightTheme);
+    // 延迟记录 tabBar 状态
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
         UIViewController *root = window.rootViewController;
