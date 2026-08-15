@@ -7,7 +7,7 @@
 #import <substrate.h>
 #import <stdarg.h>
 
-// ---------- 日志工具（保留诊断功能） ----------
+// ---------- 日志工具 ----------
 static void WriteLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -123,7 +123,7 @@ static void refreshTabBar(UITabBarController *tab) {
 %end
 
 // =============================================================
-// Hook SSTabBarController — 核心逻辑
+// Hook SSTabBarController — 核心逻辑（使用强制转换访问属性）
 // =============================================================
 %hook SSTabBarController
 
@@ -131,10 +131,11 @@ static void refreshTabBar(UITabBarController *tab) {
     %orig;
     WriteLog(@"SSTabBarController viewDidLoad");
     if (isEnabled()) {
-        if (self.selectedIndex >= self.viewControllers.count) {
-            self.selectedIndex = 0;
+        UITabBarController *tab = (UITabBarController *)self;
+        if (tab.selectedIndex >= tab.viewControllers.count) {
+            tab.selectedIndex = 0;
         }
-        logTabBarState(self.tabBar, @"viewDidLoad");
+        logTabBarState(tab.tabBar, @"viewDidLoad");
     }
 }
 
