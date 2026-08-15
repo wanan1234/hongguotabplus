@@ -1,6 +1,6 @@
 // =============================================================
-//  HongGuoFullScreen — 交换顺序实现默认打开我的
-//  稳定版，不依赖延迟设置，直接交换索引0和1
+//  HongGuoFullScreen — 精简 TabBar + 默认打开我的（交换顺序）
+//  只 Hook SSTabBar 和 SSTabBarController，不碰 SSRootViewController
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -13,6 +13,29 @@ static NSInteger defaultTabIndex() {
     return [[NSUserDefaults standardUserDefaults] integerForKey:@"HongGuoDefaultTab"];
 }
 
+// 获取过滤后的 viewControllers（根据默认页面调整顺序）
+static NSArray *getFilteredViewControllers(NSArray *vcs) {
+    if (vcs.count < 5) return vcs;
+    UIViewController *homeVC = vcs[0];
+    UIViewController *myVC = vcs[4];
+    if (defaultTabIndex() == 1) {
+        return @[myVC, homeVC];
+    }
+    return @[homeVC, myVC];
+}
+
+// 获取过滤后的 items（与 viewControllers 顺序一致）
+static NSArray *getFilteredItems(NSArray *items) {
+    if (items.count < 5) return items;
+    UITabBarItem *homeItem = items[0];
+    UITabBarItem *myItem = items[4];
+    if (defaultTabIndex() == 1) {
+        return @[myItem, homeItem];
+    }
+    return @[homeItem, myItem];
+}
+
+// 查找“我的”控制器索引（在原始数组中）
 static NSInteger indexOfMyVC(NSArray *vcs) {
     for (NSInteger i = 0; i < vcs.count; i++) {
         UIViewController *vc = vcs[i];
@@ -25,59 +48,49 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 }
 
 // =============================================================
-// Hook SSTabBarController - 在 viewDidLoad 中过滤并交换顺序
+// Hook SSTabBar - 过滤 items（顺序与 viewControllers 一致）
+// =============================================================
+%hook SSTabBar
+- (void)setItems:(NSArray *)items animated:(BOOL)animated {
+    if (isEnabled() && items.count > 2) {
+        NSArray *filtered = getFilteredItems(items);
+        %orig(filtered, animated);
+        return;
+    }
+    %orig(items, animated);
+}
+%end
+
+// =============================================================
+// Hook SSTabBarController
 // =============================================================
 %hook SSTabBarController
 
 - (void)viewDidLoad {
     %orig;
     if (!isEnabled()) return;
-
+    
     UITabBarController *tab = (UITabBarController *)self;
     NSArray *vcs = tab.viewControllers;
     if (vcs.count < 5) return;
-
-    UIViewController *homeVC = vcs[0];
-    UIViewController *myVC = vcs[4];
-    NSInteger myIdx = indexOfMyVC(vcs); // 实际上就是4
-
-    // 根据默认设置决定顺序
-    NSArray *filteredVCs;
-    NSArray *filteredItems;
-
-    if (defaultTabIndex() == 1) {
-        // 我的放在索引0
-        filteredVCs = @[myVC, homeVC];
-        // 获取 items
-        NSArray *items = tab.tabBar.items;
-        if (items.count >= 5) {
-            filteredItems = @[items[4], items[0]];
-        } else {
-            // 如果 items 不够，从 viewControllers 获取
-            filteredItems = @[myVC.tabBarItem, homeVC.tabBarItem];
-        }
-    } else {
-        // 默认首页
-        filteredVCs = @[homeVC, myVC];
-        NSArray *items = tab.tabBar.items;
-        if (items.count >= 5) {
-            filteredItems = @[items[0], items[4]];
-        } else {
-            filteredItems = @[homeVC.tabBarItem, myVC.tabBarItem];
-        }
-    }
-
-    // 设置新的 viewControllers
-    [tab setViewControllers:filteredVCs animated:NO];
-    // 设置 items
-    [tab.tabBar setItems:filteredItems animated:NO];
-    [tab.tabBar setNeedsLayout];
-    [tab.tabBar layoutIfNeeded];
-    // 选中索引0（即首页或我的）
+    
+    // 设置过滤后的 viewControllers（顺序已调整）
+    NSArray *filtered = getFilteredViewControllers(vcs);
+    [tab setViewControllers:filtered animated:NO];
+    // 选中索引0（此时可能是首页或我的）
     tab.selectedIndex = 0;
+    
+    // 同步更新 tabBar.items
+    NSArray *items = tab.tabBar.items;
+    if (items.count > 2) {
+        NSArray *filteredItems = getFilteredItems(items);
+        [tab.tabBar setItems:filteredItems animated:NO];
+        [tab.tabBar setNeedsLayout];
+        [tab.tabBar layoutIfNeeded];
+    }
 }
 
-// 拦截 setSelectedIndex，防止跳转到无效页面
+// 拦截 setSelectedIndex，修正跳转错乱
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -85,15 +98,11 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
         if (selectedIndex < vcs.count) {
             UIViewController *targetVC = vcs[selectedIndex];
             NSString *title = targetVC.tabBarItem.title;
-            // 如果试图选中剧场（已被过滤），重定向到0
-            if ([title isEqualToString:@"剧场"] || [title isEqualToString:@"商城"] || [title isEqualToString:@"福利"]) {
+            if ([title isEqualToString:@"剧场"]) {
+                // 重定向到索引0（此时可能是首页或我的）
                 %orig(0);
                 return;
             }
-        } else {
-            // 越界重置
-            %orig(0);
-            return;
         }
     }
     %orig(selectedIndex);
@@ -101,7 +110,7 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 %end
 
 // =============================================================
-// 双指双击菜单（保持不变）
+// 双指双击菜单
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
