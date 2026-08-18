@@ -1,7 +1,7 @@
 // =============================================================
-//  HongGuoFullScreen — 最终纯净版
-//  功能：精简Tab栏 + 默认启动页 + 双指双击菜单
-//  无日志、无alpha修复
+//  HongGuoFullScreen — 修复版（默认启动页只生效一次）
+//  功能：精简Tab栏 + 默认启动页（仅在App启动时生效一次）+ 双指双击菜单
+//  修复：返回视频详情页时不再被强行跳转至“我的”
 // =============================================================
 #import <UIKit/UIKit.h>
 #import <substrate.h>
@@ -44,7 +44,10 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
 // =============================================================
 %hook SSTabBarController
 
-// 拦截 setSelectedIndex，修正跳转错乱
+// 用于确保默认启动页只在应用启动时生效一次
+static dispatch_once_t onceToken = 0;
+
+// 拦截 setSelectedIndex，修正跳转错乱（保留原有逻辑）
 - (void)setSelectedIndex:(NSInteger)selectedIndex {
     if (isEnabled()) {
         UITabBarController *tab = (UITabBarController *)self;
@@ -67,23 +70,29 @@ static NSInteger indexOfMyVC(NSArray *vcs) {
     %orig(selectedIndex);
 }
 
-// viewWillAppear 中前置设置 selectedIndex
+// viewWillAppear 中只执行一次默认启动页设置
 - (void)viewWillAppear:(BOOL)animated {
-    if (isEnabled() && defaultTabIndex() == 1) {
-        UITabBarController *tab = (UITabBarController *)self;
-        NSArray *vcs = tab.viewControllers;
-        NSInteger myIndex = indexOfMyVC(vcs);
-        if (myIndex != -1 && tab.selectedIndex != myIndex) {
-            tab.selectedIndex = myIndex;
+    %orig;  // 先调用原始方法
+
+    if (!isEnabled()) return;
+
+    // 只在启动时执行一次默认跳转
+    dispatch_once(&onceToken, ^{
+        if (defaultTabIndex() == 1) {
+            UITabBarController *tab = (UITabBarController *)self;
+            NSArray *vcs = tab.viewControllers;
+            NSInteger myIndex = indexOfMyVC(vcs);
+            if (myIndex != -1 && tab.selectedIndex != myIndex) {
+                tab.selectedIndex = myIndex;
+            }
         }
-    }
-    %orig;
+    });
 }
 
 %end
 
 // =============================================================
-// 双指双击菜单
+// 双指双击菜单（保持不变）
 // =============================================================
 static void showToast(NSString *msg, UIWindow *window) {
     UIViewController *top = window.rootViewController;
